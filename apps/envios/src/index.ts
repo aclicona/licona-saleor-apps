@@ -19,6 +19,27 @@ app.get('/api/manifest', async () => ({
       syncEvents: ['SHIPPING_LIST_METHODS_FOR_CHECKOUT'],
       isActive: true,
       targetUrl: `${APP_URL}/api/webhooks/shipping-list-methods`,
+      query: `subscription {
+  event {
+    ... on ShippingListMethodsForCheckout {
+      checkout {
+        id
+        shippingAddress {
+          city
+          postalCode
+          countryArea
+        }
+        lines {
+          quantity
+          variant {
+            weight { value unit }
+            product { weight { value unit } }
+          }
+        }
+      }
+    }
+  }
+}`,
     },
   ],
   extensions: [],
