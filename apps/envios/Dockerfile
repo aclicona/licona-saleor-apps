@@ -7,7 +7,6 @@ RUN npm install -g pnpm
 # Copy monorepo root files and app files
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/envios ./apps/envios
-COPY packages ./packages
 
 # Install dependencies with frozen lockfile
 RUN pnpm install --frozen-lockfile
@@ -26,7 +25,6 @@ RUN npm install -g pnpm
 # Copy lockfiles and package files
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/envios/package.json ./apps/envios/package.json
-COPY packages ./packages
 
 # Install production dependencies only
 RUN pnpm install --frozen-lockfile --prod
