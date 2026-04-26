@@ -1,0 +1,7 @@
+{
+  "name": "licona-saleor-apps",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}
