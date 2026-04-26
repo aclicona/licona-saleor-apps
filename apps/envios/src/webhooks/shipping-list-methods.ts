@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 
 interface ShippingCheckoutPayload {
   checkout: {
@@ -19,13 +19,6 @@ interface ShippingCheckoutPayload {
   }
 }
 
-function verifyWebhookSignature(payload: string, signature: string, secret: string): boolean {
-  const expected = createHmac('sha256', secret).update(payload).digest('hex')
-  const sigBuf = Buffer.from(signature, 'hex')
-  const expBuf = Buffer.from(expected, 'hex')
-  return sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf)
-}
-
 function calculateTotalWeightKg(lines: ShippingCheckoutPayload['checkout']['lines']): number {
   return lines.reduce((total, line) => {
     const weight = line.variant.weight?.value ?? line.variant.product.weight?.value ?? 0.5
@@ -37,12 +30,17 @@ export async function shippingListMethodsHandler(
   request: FastifyRequest,
   reply: FastifyReply
 ) {
-  const secret = process.env.SALEOR_WEBHOOK_SECRET ?? ''
-  const signature = (request.headers['saleor-signature'] as string) ?? ''
+  const signature = request.headers['saleor-signature'] as string | undefined
   const rawBody = JSON.stringify(request.body)
+  const saleorApiUrl = process.env.SALEOR_API_URL ?? ''
 
-  if (!verifyWebhookSignature(rawBody, signature, secret)) {
-    return reply.status(401).send({ error: 'Invalid signature' })
+  try {
+    await verifySaleorWebhook(rawBody, signature, saleorApiUrl)
+  } catch (err) {
+    if (err instanceof SaleorWebhookError) {
+      request.log.warn({ msg: err.message, cause: err.cause })
+    }
+    return reply.status(401).send({ error: 'Invalid webhook signature' })
   }
 
   const payload = request.body as ShippingCheckoutPayload
@@ -56,7 +54,7 @@ export async function shippingListMethodsHandler(
 
   const servientregaPrice = 8000 + Math.max(0, weightKg - 1) * 2000
   const coordinadoraPrice = 9000 + Math.max(0, weightKg - 1) * 1800
-  const tccPrice = 10000 + Math.max(0, weightKg - 1) * 1500
+  const tccPrice          = 10000 + Math.max(0, weightKg - 1) * 1500
 
   return reply.send([
     {

@@ -4,8 +4,9 @@ WORKDIR /app
 # Install pnpm in builder stage
 RUN npm install -g pnpm
 
-# Copy monorepo root files and app files
+# Copy monorepo root files, shared packages, and app files
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages ./packages
 COPY apps/envios ./apps/envios
 
 # Install dependencies with frozen lockfile
@@ -24,13 +25,15 @@ RUN npm install -g pnpm
 
 # Copy lockfiles and package files
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages ./packages
 COPY apps/envios/package.json ./apps/envios/package.json
 
 # Install production dependencies only
 RUN pnpm install --frozen-lockfile --prod
 
-# Copy built app from builder
+# Copy built artifacts from builder (app + shared package)
 COPY --from=builder /app/apps/envios/dist ./apps/envios/dist
+COPY --from=builder /app/packages/webhook-utils/dist ./packages/webhook-utils/dist
 
 # Set working directory to app
 WORKDIR /app/apps/envios
