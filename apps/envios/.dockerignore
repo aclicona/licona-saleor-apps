@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.ts
+!*.d.ts
+.env
+.env.local
+.env.*.local
+.git
+.gitignore
+.github
+*.md
+.vscode
+.idea
+coverage/
+.vitest/
+.next/
