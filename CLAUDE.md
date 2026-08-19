@@ -1,8 +1,13 @@
 # saleor-apps
 
+> **Proceso:** Las reglas de desarrollo no negociables están en `../CLAUDE.md` (sección "Proceso de Desarrollo"). Leerlas antes de cualquier sesión. En resumen: planear antes de codificar, consultar antes de decidir, usar skills de Superpowers/ECC, validar exhaustivamente antes de reportar éxito.
+
+
 Monorepo pnpm de Saleor Apps para el e-commerce colombiano. Cada app es un microservicio independiente que se comunica con Saleor via webhooks síncronos (JWS/RS256).
 
 **Contexto de proyecto completo:** `../CLAUDE.md` (o abre `ecommerce/` en Claude Code).
+
+> **Graph:** Este repo tiene knowledge graph (`code-review-graph`, MCP en `.mcp.json`). Para preguntas estructurales (callers, imports, radio de impacto) usarlo ANTES que Grep/Read. Se actualiza solo en cada commit/merge vía `.git/hooks/post-*`; tras editar sin commitear, ejecutar `build_or_update_graph_tool`. Detalles en `../CLAUDE.md` §"El graph".
 
 ---
 
@@ -30,8 +35,9 @@ pnpm --filter @licona/app-envios dev   # → http://localhost:3002
 ```
 
 Después de arrancar una app, registrarla en el Dashboard local:
-1. Ir a `http://localhost:8000/dashboard/apps/`
-2. "Install app" → URL del manifest: `http://localhost:3001/api/manifest`
+1. Ir a `http://localhost:9000` (Dashboard Docker)
+2. "Install app" → URL del manifest: `http://127.0.0.1:3001/api/manifest`
+   ⚠️ Usar `127.0.0.1` y NO `localhost` — en macOS `localhost` resuelve a `::1` (IPv6) y el proceso Node solo escucha en IPv4.
 3. El Dashboard llama al manifest, la app responde con `SALEOR_APP_TOKEN` y `SALEOR_APP_ID`.
 4. Copiar esos valores al `.env` de la app correspondiente y reiniciar.
 
