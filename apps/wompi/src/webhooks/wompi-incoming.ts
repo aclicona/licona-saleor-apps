@@ -23,7 +23,7 @@ interface WompiEvent {
 }
 
 export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyReply) {
-  const rawBody = JSON.stringify(req.body)
+  const rawBody = (req as any).rawBody as string
   const timestamp = req.headers['x-event-created-at'] as string ?? ''
   const signature = req.headers['x-signature'] as string ?? ''
   const secret = process.env.WOMPI_EVENTS_SECRET ?? ''

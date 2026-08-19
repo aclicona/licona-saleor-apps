@@ -31,7 +31,7 @@ export async function shippingListMethodsHandler(
   reply: FastifyReply
 ) {
   const signature = request.headers['saleor-signature'] as string | undefined
-  const rawBody = JSON.stringify(request.body)
+  const rawBody = (request as any).rawBody as string
   const saleorApiUrl = process.env.SALEOR_API_URL ?? ''
 
   try {

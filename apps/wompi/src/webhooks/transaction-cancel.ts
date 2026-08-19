@@ -9,7 +9,7 @@ interface TransactionCancelPayload {
 
 export async function transactionCancelHandler(req: FastifyRequest, reply: FastifyReply) {
   try {
-    await verifySaleorWebhook(JSON.stringify(req.body), req.headers['saleor-signature'] as string, process.env.SALEOR_API_URL ?? '')
+    await verifySaleorWebhook((req as any).rawBody, req.headers['saleor-signature'] as string, process.env.SALEOR_API_URL ?? '')
   } catch (e) {
     if (e instanceof SaleorWebhookError) req.log.warn(e.message)
     return reply.status(401).send({ error: 'Invalid signature' })

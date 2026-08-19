@@ -1,4 +1,4 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyRequest } from 'fastify'
 import { paymentGatewayInitializeHandler } from './webhooks/payment-gateway-initialize.js'
 import { transactionInitializeHandler } from './webhooks/transaction-initialize.js'
 import { transactionProcessHandler } from './webhooks/transaction-process.js'
@@ -8,7 +8,18 @@ import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
 
 const app = Fastify({ logger: true })
-const APP_URL = process.env.APP_URL ?? 'http://localhost:3002'
+const APP_URL = (process.env.APP_URL ?? 'http://localhost:3001').replace(/\/$/, '')
+
+// Capture raw body BEFORE JSON parse — needed for JWS signature verification.
+// JSON.stringify(req.body) after parse produces different bytes from the original.
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+  try {
+    ;(req as FastifyRequest & { rawBody: string }).rawBody = body as string
+    done(null, JSON.parse(body as string))
+  } catch (err) {
+    done(err as Error, undefined)
+  }
+})
 
 // ─── Manifest ────────────────────────────────────────────────────────────────
 app.get('/api/manifest', async () => ({
@@ -49,7 +60,7 @@ app.get('/api/manifest', async () => ({
       sourceObject {
         ... on Checkout {
           id
-          userEmail
+          email
           billingAddress { firstName lastName streetAddress1 city country { code } postalCode }
           totalPrice { gross { amount currency } }
         }
@@ -159,7 +170,7 @@ app.post('/api/webhooks/transaction-cancelation-requested', transactionCancelHan
 app.post('/api/webhooks/wompi-incoming', wompiIncomingHandler)
 
 // ─── Start ───────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT ?? '3002', 10)
+const PORT = parseInt(process.env.PORT ?? '3001', 10)
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) { app.log.error(err); process.exit(1) }
 })
