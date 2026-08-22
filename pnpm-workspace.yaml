@@ -1,3 +1,17 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# pnpm 10 bloquea por defecto los scripts de instalación de las dependencias y
+# SALE CON CÓDIGO 1 (ERR_PNPM_IGNORED_BUILDS). En local no se nota porque el
+# store ya tiene los binarios; en un contenedor limpio rompe el build — le pasó
+# a app-envios en Railway el 2026-08-22.
+# Estos dos SÍ necesitan su script: esbuild descarga su binario nativo y sharp
+# enlaza libvips. Se listan explícitamente en vez de permitir todo, que es lo
+# que la protección de pnpm existe para evitar.
+# Va aquí y no en el campo `pnpm` de package.json: pnpm 10 lee los ajustes del
+# workspace desde este archivo.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+
