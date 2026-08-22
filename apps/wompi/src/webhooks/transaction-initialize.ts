@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
+import { camposDeCorrelacion } from '../lib/correlacion.js'
 
 interface TransactionInitializePayload {
   transaction: { id: string; pspReference: string }
@@ -23,10 +24,19 @@ interface TransactionInitializePayload {
 }
 
 export async function transactionInitializeHandler(req: FastifyRequest, reply: FastifyReply) {
+  // Logger de la petición con las claves canónicas ya puestas: todo lo que se
+  // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
+  // de verificar la firma para que también quede constancia de lo que se rechaza.
+  const log = req.log.child({ webhook: 'transaction-initialize-session', ...camposDeCorrelacion(req.body) })
+  log.info('Webhook de Saleor recibido')
+
   try {
     await verifySaleorWebhook((req as any).rawBody, req.headers['saleor-signature'] as string, process.env.SALEOR_API_URL ?? '')
   } catch (e) {
-    if (e instanceof SaleorWebhookError) req.log.warn(e.message)
+    // `reason` distingue "clave rotada, se resuelve sola" de "alguien está
+    // probando suerte": son incidentes distintos y sin esto se ven igual.
+    if (e instanceof SaleorWebhookError) log.warn({ motivo: e.reason }, e.message)
+    else log.warn({ error: String(e) }, 'Fallo inesperado verificando la firma de Saleor')
     return reply.status(401).send({ error: 'Invalid signature' })
   }
 
@@ -40,7 +50,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   const storefrontUrl = process.env.STOREFRONT_URL ?? 'http://localhost:3000'
 
   if (action.currency !== 'COP') {
-    req.log.error({ currency: action.currency }, 'Wompi only supports COP — configure default-channel currency to COP in Saleor')
+    log.error({ currency: action.currency }, 'Wompi only supports COP — configure default-channel currency to COP in Saleor')
     return reply.send({
       result: 'CHARGE_FAILURE',
       amount: action.amount,
@@ -92,6 +102,11 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       paymentMethod,
     })
 
+    // Camino feliz explícito: aquí es donde el hilo de Saleor se ata al de
+    // Wompi (el id de Wompi pasa a ser el pspReference). Sin esta línea la
+    // cadena solo se puede reconstruir cuando algo falla.
+    log.info({ pspReference: wompiTxn.id, metodo: method }, 'Transacción creada en Wompi')
+
     return reply.send({
       result: 'CHARGE_ACTION_REQUIRED',
       amount: action.amount,
@@ -99,7 +114,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       data: { redirectUrl: wompiTxn.redirect_url, wompiTransactionId: wompiTxn.id },
     })
   } catch (error) {
-    req.log.error(error)
+    log.error(error)
     return reply.send({
       result: 'CHARGE_FAILURE',
       amount: action.amount,
