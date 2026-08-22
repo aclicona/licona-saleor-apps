@@ -12,14 +12,16 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch"
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run"
   },
   "dependencies": {
     "jose": "^5.0.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.4.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^1.5.0"
   }
 }

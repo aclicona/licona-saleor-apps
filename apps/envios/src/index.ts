@@ -1,9 +1,18 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyRequest } from 'fastify'
 import { shippingListMethodsHandler } from './webhooks/shipping-list-methods.js'
 
 const app = Fastify({ logger: true })
 
-const APP_URL = process.env.APP_URL ?? 'http://localhost:3001'
+const APP_URL = (process.env.APP_URL ?? 'http://localhost:3002').replace(/\/$/, '')
+
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+  try {
+    ;(req as FastifyRequest & { rawBody: string }).rawBody = body as string
+    done(null, JSON.parse(body as string))
+  } catch (err) {
+    done(err as Error, undefined)
+  }
+})
 
 app.get('/', async (request, reply) => {
   reply.type('text/html')
@@ -60,13 +69,14 @@ app.post('/api/register', async (request, reply) => {
   const { auth_token } = request.body as { auth_token: string }
   if (!auth_token) return reply.status(400).send({ error: 'Missing auth_token' })
   // Token stored in env for now — replace with APL (Upstash) in Fase 3
-  app.log.info({ msg: 'App registered', token: auth_token.slice(0, 8) + '...' })
+  // Full token logged for local dev setup — copy to .env as SALEOR_APP_TOKEN
+  app.log.info({ msg: 'App registered — copy token to .env', token: auth_token })
   return reply.status(200).send({ success: true })
 })
 
 app.post('/api/webhooks/shipping-list-methods', shippingListMethodsHandler)
 
-const PORT = parseInt(process.env.PORT ?? '3001', 10)
+const PORT = parseInt(process.env.PORT ?? '3002', 10)
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) { app.log.error(err); process.exit(1) }
 })

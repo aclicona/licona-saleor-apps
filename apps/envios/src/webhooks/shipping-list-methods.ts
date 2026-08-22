@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
+import { calculateTotalWeightKg, cotizarEnvios, type ShippingLine } from '../lib/tarifas.js'
 
 interface ShippingCheckoutPayload {
   checkout: {
@@ -9,21 +10,8 @@ interface ShippingCheckoutPayload {
       postalCode: string
       countryArea: string
     } | null
-    lines: Array<{
-      quantity: number
-      variant: {
-        weight: { value: number; unit: string } | null
-        product: { weight: { value: number; unit: string } | null }
-      }
-    }>
+    lines: ShippingLine[]
   }
-}
-
-function calculateTotalWeightKg(lines: ShippingCheckoutPayload['checkout']['lines']): number {
-  return lines.reduce((total, line) => {
-    const weight = line.variant.weight?.value ?? line.variant.product.weight?.value ?? 0.5
-    return total + weight * line.quantity
-  }, 0)
 }
 
 export async function shippingListMethodsHandler(
@@ -31,7 +19,7 @@ export async function shippingListMethodsHandler(
   reply: FastifyReply
 ) {
   const signature = request.headers['saleor-signature'] as string | undefined
-  const rawBody = JSON.stringify(request.body)
+  const rawBody = (request as any).rawBody as string
   const saleorApiUrl = process.env.SALEOR_API_URL ?? ''
 
   try {
@@ -52,34 +40,5 @@ export async function shippingListMethodsHandler(
 
   const weightKg = calculateTotalWeightKg(lines)
 
-  const servientregaPrice = 8000 + Math.max(0, weightKg - 1) * 2000
-  const coordinadoraPrice = 9000 + Math.max(0, weightKg - 1) * 1800
-  const tccPrice          = 10000 + Math.max(0, weightKg - 1) * 1500
-
-  return reply.send([
-    {
-      id: 'servientrega-estandar',
-      name: 'Servientrega Estándar (3-5 días)',
-      amount: Math.round(servientregaPrice),
-      currency: 'COP',
-      maximumDeliveryDays: 5,
-      minimumDeliveryDays: 3,
-    },
-    {
-      id: 'coordinadora-estandar',
-      name: 'Coordinadora Estándar (3-5 días)',
-      amount: Math.round(coordinadoraPrice),
-      currency: 'COP',
-      maximumDeliveryDays: 5,
-      minimumDeliveryDays: 3,
-    },
-    {
-      id: 'tcc-express',
-      name: 'TCC Express (1-2 días)',
-      amount: Math.round(tccPrice),
-      currency: 'COP',
-      maximumDeliveryDays: 2,
-      minimumDeliveryDays: 1,
-    },
-  ])
+  return reply.send(cotizarEnvios(weightKg))
 }
