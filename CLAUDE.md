@@ -82,7 +82,12 @@ Cada app de pasarela implementa **6 webhooks síncronos** de Saleor:
 
 Más un webhook **entrante** de la pasarela (ej. `POST /wompi-incoming`) que llama `transactionEventReport` en Saleor.
 
-**Conversión de montos:** Saleor envía COP (ej. `120000`). Wompi espera centavos (`12000000`). Multiplicar por 100 en la app.
+**Conversión de montos:** Saleor envía COP (ej. `120000`), Wompi espera centavos (`12000000`).
+**No multiplicar a mano** — usar `copToCents` / `centsToCop` (`apps/wompi/src/lib/money.ts`, cubiertas
+por tests desde 2026-08-22). Redondean explícitamente: en IEEE-754 `19.99 * 100` da
+`1998.9999999999998`, y Saleor almacena importes con 3 decimales, así que el número que llega puede
+no ser un entero limpio. Ante un importe inválido **lanzan**, en vez de dejar pasar un cobro
+equivocado en silencio.
 
 ---
 
