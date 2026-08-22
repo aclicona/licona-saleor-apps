@@ -55,7 +55,11 @@ export class WompiClient {
     return this.config.publicKey
   }
 
-  private integritySignature(reference: string, amountInCents: number, currency: string): string {
+  // Pública (no `private`) para poder testearla directamente: es una función
+  // pura que verifica la integridad del cobro (Wompi la recalcula del lado
+  // del servidor y rechaza la transacción si no coincide), así que merece
+  // cobertura propia sin depender de mockear `fetch` en `createTransaction`.
+  integritySignature(reference: string, amountInCents: number, currency: string): string {
     const data = `${reference}${amountInCents}${currency}${this.config.integrityKey}`
     return createHash('sha256').update(data).digest('hex')
   }

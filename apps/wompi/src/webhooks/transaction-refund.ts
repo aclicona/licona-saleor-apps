@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
+import { copToCents } from '../lib/money.js'
 
 interface TransactionRefundPayload {
   transaction: { id: string; pspReference: string }
@@ -21,7 +22,7 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
   }
 
   try {
-    await wompiClient().refundTransaction(transaction.pspReference, Math.round(action.amount * 100))
+    await wompiClient().refundTransaction(transaction.pspReference, copToCents(action.amount))
     return reply.send({ result: 'REFUND_SUCCESS', amount: action.amount, pspReference: transaction.pspReference })
   } catch (error) {
     req.log.error(error)

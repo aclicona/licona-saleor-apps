@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
+import { copToCents } from '../lib/money.js'
 
 interface TransactionInitializePayload {
   transaction: { id: string; pspReference: string }
@@ -49,7 +50,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
 
   try {
     // Saleor sends COP (e.g. 120000). Wompi expects centavos (12000000).
-    const amountInCents = Math.round(action.amount * 100)
+    const amountInCents = copToCents(action.amount)
     const client = wompiClient()
     const acceptanceToken = await client.getAcceptanceToken()
 
