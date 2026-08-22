@@ -63,3 +63,54 @@ export function copToCents(amountCop: number): number {
   // decimales que puede llegar por el almacenamiento de 3 decimales de Saleor.
   return Math.round(amountCop * 100)
 }
+
+/**
+ * Convierte un importe en centavos, tal como lo entrega Wompi en el campo
+ * `amount_in_cents` de sus webhooks, a pesos colombianos, tal como los espera
+ * Saleor en `transactionEventReport(amount:)`.
+ *
+ * Es la conversión inversa de `copToCents` y existe para que el handler del
+ * webhook entrante no haga `txn.amount_in_cents / 100` inline: ese importe es
+ * el que Saleor va a comparar contra el evento previo para decidir si el
+ * reintento es idéntico (misma `pspReference` + mismo `type` + mismo importe
+ * → `alreadyProcessed`; importe distinto → `INCORRECT_DETAILS`). Un importe
+ * mal convertido no solo reporta mal el cobro: rompe la deduplicación del
+ * lado servidor.
+ *
+ * Decisión sobre entradas inválidas: se LANZA. Wompi documenta
+ * `amount_in_cents` como un entero; un valor no entero, no finito, negativo o
+ * fuera del rango entero seguro de IEEE-754 no es un importe real sino un
+ * payload corrupto o manipulado. Lanzar aquí permite que el handler lo trate
+ * como lo que es — un fallo PERMANENTE que ningún reintento de Wompi va a
+ * arreglar — y responda 200 con log crítico en vez de reportar a Saleor un
+ * importe inventado.
+ *
+ * Sobre la precisión: dividir un entero de centavos entre 100 es seguro en
+ * IEEE-754 aunque el resultado no sea representable exacto (19.99 no lo es).
+ * `1999 / 100` da el double más cercano a 19.99 y `.toString()` devuelve
+ * `"19.99"` — la representación más corta que round-trippea. Por eso no hace
+ * falta redondear el resultado: es la división cruda la que da el valor
+ * correcto, al revés que en `copToCents`, donde la multiplicación cruda falla.
+ *
+ * @param amountInCents Importe en centavos, como lo envía Wompi en `data.transaction.amount_in_cents`.
+ * @returns El importe equivalente en pesos colombianos, listo para el campo `amount` de Saleor.
+ * @throws {Error} Si `amountInCents` no es un entero seguro y no negativo.
+ */
+export function centsToCop(amountInCents: number): number {
+  if (typeof amountInCents !== 'number' || Number.isNaN(amountInCents)) {
+    throw new Error(`Importe en centavos inválido (no es un número): ${String(amountInCents)}`)
+  }
+  if (!Number.isFinite(amountInCents)) {
+    throw new Error(`Importe en centavos inválido (no es finito): ${amountInCents}`)
+  }
+  if (amountInCents < 0) {
+    throw new Error(`Importe en centavos inválido (negativo): ${amountInCents}`)
+  }
+  // Number.isSafeInteger rechaza a la vez los no enteros (1999.5) y las
+  // magnitudes fuera del rango donde los enteros de JS son exactos.
+  if (!Number.isSafeInteger(amountInCents)) {
+    throw new Error(`Importe en centavos inválido (no es un entero seguro): ${amountInCents}`)
+  }
+
+  return amountInCents / 100
+}

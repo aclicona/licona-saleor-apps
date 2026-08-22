@@ -89,9 +89,27 @@ Más un webhook **entrante** de la pasarela (ej. `POST /wompi-incoming`) que lla
 ## Verificación de webhooks
 
 Los webhooks de Saleor hacia las Apps usan **JWS/RS256** (Saleor firma con su RSA privada).
-Los webhooks entrantes de pasarelas (Wompi, PayU) usan **HMAC** con su propio secret.
 
 El paquete compartido `packages/webhook-utils` (`@licona/webhook-utils`) expone `verifySaleorWebhook` para JWS. Úsarlo en todos los handlers de webhooks Saleor.
+
+⚠️ **Los webhooks entrantes de las pasarelas NO son HMAC — al menos Wompi no lo es.** Esta línea
+decía "usan HMAC con su propio secret" y **era falsa**; indujo una implementación equivocada que se
+corrigió el 2026-08-22 (ver [bitácora](../docs/hardening/sessions/2026-08-22-idempotencia-y-firma-wompi.md)).
+Cada pasarela define su propio esquema y **hay que leer su documentación, no asumir**.
+
+**Wompi** (verificado contra https://docs.wompi.co/en/docs/colombia/eventos/):
+- **SHA-256 simple**, no HMAC.
+- Se firma la concatenación **sin separadores** de los *valores* de las propiedades que el propio
+  evento lista en `signature.properties`, seguidos de `signature.timestamp` y del **secreto de
+  eventos** (distinto de la llave de integridad, que firma la *creación* de transacciones).
+- `signature.properties` **varía entre eventos**: hay que leer la lista de cada evento, nunca
+  codificarla fija.
+- El checksum viaja en la cabecera `X-Event-Checksum` **y** en `signature.checksum` (son copias).
+  **No** existen las cabeceras `x-signature` ni `x-event-created-at`.
+- Implementación y tests: `apps/wompi/src/lib/wompi-signature.ts`.
+
+**Al integrar PayU o MercadoPago, verificar su esquema en la documentación del proveedor antes de
+escribir una línea** — y no reutilizar el de Wompi por parecido.
 
 ---
 
