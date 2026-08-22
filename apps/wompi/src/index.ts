@@ -8,6 +8,7 @@ import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
 import { mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
 import { exigirAppRegistrada, manejadorRegistro, manejadorSalud } from './lib/registro.js'
+import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
 
 // Fail-fast ANTES de crear el servidor: sin las variables obligatorias el
 // proceso no arranca. En un producto single-tenant replicable, una variable
@@ -18,7 +19,15 @@ import { exigirAppRegistrada, manejadorRegistro, manejadorSalud } from './lib/re
 // *operación* y no de arranque. El porqué está en lib/config.ts.
 verificarConfiguracionAlArranque()
 
-const app = Fastify({ logger: true })
+// El logger ya no se activa a pelo con `true`: `opcionesServidor()` le pone
+// nivel (LOG_LEVEL), `redact` para que una credencial no acabe en un log
+// retenido, y un `genReqId` que identifica el salto local. Ver lib/logging.ts.
+const app = Fastify(opcionesServidor())
+
+// Un LOG_LEVEL inválido no tumba el proceso (ver lib/logging.ts), pero tampoco
+// se traga en silencio: se avisa en cuanto hay logger con el que avisar.
+const avisoNivel = avisoNivelLogInvalido()
+if (avisoNivel) app.log.warn(avisoNivel)
 
 // Aviso de modo degradado. Va inmediatamente después de crear el logger y antes
 // de registrar una sola ruta, para que sea lo primero que se lea en el log de

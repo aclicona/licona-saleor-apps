@@ -128,6 +128,7 @@ export const VARIABLES_OPCIONALES: ReadonlyArray<{ nombre: string; porDefecto: s
   { nombre: 'WOMPI_SANDBOX', porDefecto: 'true (cualquier valor distinto de "false" es sandbox)' },
   { nombre: 'SALEOR_APP_ID', porDefecto: 'sin uso en runtime; informativo tras instalar la App' },
   { nombre: 'APL', porDefecto: 'env' },
+  { nombre: 'LOG_LEVEL', porDefecto: 'info (un valor inválido cae al default y se avisa; ver lib/logging.ts)' },
 ]
 
 /**

@@ -7,6 +7,7 @@ import {
   clasificarFalloSaleor,
 } from '../lib/saleor-errors.js'
 import { CABECERA_CHECKSUM, verificarFirmaWompi, type EventoFirmado } from '../lib/wompi-signature.js'
+import { camposDeCorrelacionWompi } from '../lib/correlacion.js'
 
 const WOMPI_TO_SALEOR: Record<string, 'CHARGE_SUCCESS' | 'CHARGE_FAILURE'> = {
   APPROVED: 'CHARGE_SUCCESS',
@@ -56,6 +57,13 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
   const secret = process.env.WOMPI_EVENTS_SECRET ?? ''
   const event = req.body as WompiEvent
 
+  // Clave de unión con el resto de la cadena: el id de la transacción en Wompi
+  // es exactamente el `pspReference` que esta App reporta a Saleor. Se extrae
+  // de forma defensiva y ANTES de verificar la firma, para que los eventos
+  // rechazados también se puedan cruzar con los aceptados.
+  const log = req.log.child({ webhook: 'wompi-incoming', ...camposDeCorrelacionWompi(event) })
+  log.info({ evento: (event as { event?: string })?.event ?? null }, 'Evento entrante de Wompi recibido')
+
   // Verificación INCONDICIONAL. Antes iba envuelta en `if (secret && ...)`, así
   // que con la variable vacía no se verificaba nada y cualquier POST anónimo
   // podía reportar un CHARGE_SUCCESS y marcar como pagada una orden impaga.
@@ -72,7 +80,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     // El motivo se registra porque distingue "alguien está probando suerte" de
     // "Wompi cambió el formato del evento y hay que actualizar la App" — dos
     // incidentes muy distintos que sin esto se ven exactamente igual en el log.
-    req.log.warn(
+    log.warn(
       { motivo: firma.motivo, detalle: firma.detalle, rawBody },
       'Firma de Wompi inválida — evento rechazado sin reportar a Saleor',
     )
@@ -83,7 +91,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
   if (!txn) {
     // Firma válida pero sin transacción en el cuerpo. Permanente: el payload
     // no va a cambiar por reintentar.
-    req.log.error({ rawBody }, 'Evento de Wompi con firma válida pero sin data.transaction')
+    log.error({ rawBody }, 'Evento de Wompi con firma válida pero sin data.transaction')
     return reply.status(200).send({ ok: true })
   }
 
@@ -92,8 +100,8 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     // No es un error: Wompi tiene estados intermedios (PENDING) y puede añadir
     // otros. Se registra el estado LITERAL para poder detectar estados nuevos
     // de Wompi leyendo logs, sin tener que reproducir el evento.
-    req.log.info(
-      { estadoWompi: txn.status, pspReference: txn.id, referencia: txn.reference },
+    log.info(
+      { estadoWompi: txn.status, referencia: txn.reference },
       'Estado de Wompi sin mapeo a evento de Saleor — nada que reportar',
     )
     return reply.status(200).send({ ok: true })
@@ -105,8 +113,8 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
   try {
     importeCop = centsToCop(txn.amount_in_cents)
   } catch (error) {
-    req.log.fatal(
-      { pspReference: txn.id, referencia: txn.reference, amountInCents: txn.amount_in_cents, rawBody, error },
+    log.fatal(
+      { referencia: txn.reference, amountInCents: txn.amount_in_cents, rawBody, error },
       'Importe de Wompi corrupto: no se reporta a Saleor. Ningún reintento lo arregla — requiere revisión humana',
     )
     return reply.status(200).send({ ok: true })
@@ -125,14 +133,14 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     const clasificacion = clasificarFalloSaleor(error)
 
     if (clasificacion === 'AUTENTICACION') {
-      req.log.error(
-        { pspReference: txn.id, referencia: txn.reference, tipo: saleorEventType, error },
+      log.error(
+        { referencia: txn.reference, tipo: saleorEventType, error },
         'Saleor rechazó la autenticación de la App: el evento es válido pero la instancia está rota. ' +
           'Rotar SALEOR_APP_TOKEN — el siguiente reintento de Wompi entrará solo',
       )
     } else {
-      req.log.warn(
-        { pspReference: txn.id, referencia: txn.reference, tipo: saleorEventType, error },
+      log.warn(
+        { referencia: txn.reference, tipo: saleorEventType, error },
         'Saleor no atendió el reporte del evento (transitorio). Se devuelve 500 para que Wompi reintente',
       )
     }
@@ -151,9 +159,8 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
       // es el mismo que Saleor acaba de rechazar. O Wompi es inconsistente
       // consigo mismo, o alguien manipuló el importe. Se registra el payload
       // crudo porque es la única prueba de qué se recibió exactamente.
-      req.log.fatal(
+      log.fatal(
         {
-          pspReference: txn.id,
           referencia: txn.reference,
           tipo: saleorEventType,
           importeCop,
@@ -164,8 +171,8 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
           'Posible inconsistencia de Wompi o manipulación del importe — requiere revisión humana inmediata',
       )
     } else if (codigos.includes(CODIGO_TRANSACCION_INEXISTENTE)) {
-      req.log.error(
-        { pspReference: txn.id, referencia: txn.reference, errores: resultado.errors },
+      log.error(
+        { referencia: txn.reference, errores: resultado.errors },
         'La transacción referenciada no existe en Saleor (cruce de entornos o referencia basura). ' +
           'Permanente: no se pide reintento',
       )
@@ -173,8 +180,8 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
       // Los demás códigos de transactionEventReport (INVALID, REQUIRED,
       // GRAPHQL_ERROR, ALREADY_EXISTS) son validaciones de payload o de
       // estado: ninguno converge reintentando el mismo evento.
-      req.log.error(
-        { pspReference: txn.id, referencia: txn.reference, errores: resultado.errors },
+      log.error(
+        { referencia: txn.reference, errores: resultado.errors },
         'Saleor rechazó el evento por un error de negocio. Permanente: no se pide reintento',
       )
     }
@@ -186,8 +193,8 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     // Evidencia observable de que la idempotencia del lado servidor funciona:
     // Wompi reintentó, Saleor reconoció el evento previo y no duplicó nada.
     // Es un camino sano, por eso info y no warn.
-    req.log.info(
-      { pspReference: txn.id, tipo: saleorEventType, referencia: txn.reference },
+    log.info(
+      { tipo: saleorEventType, referencia: txn.reference },
       'Evento ya procesado por Saleor: el reintento de Wompi convergió sin duplicar (alreadyProcessed)',
     )
   }

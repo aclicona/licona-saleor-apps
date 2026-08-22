@@ -78,6 +78,11 @@ function crearRequest({ evento, checksum, ubicacion = 'ambos', secret = SECRET }
     : base
   const rawBody = JSON.stringify(cuerpo)
 
+  // El handler crea un logger hijo con las claves canónicas y escribe por él.
+  // El doble devuelve el MISMO objeto de espías desde `child()` para que las
+  // aserciones sobre `log.warn`/`log.error` sigan viendo las llamadas, y además
+  // acumula los `bindings` para poder comprobar qué claves lleva cada línea.
+  const bindings: Record<string, unknown> = {}
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -85,7 +90,15 @@ function crearRequest({ evento, checksum, ubicacion = 'ambos', secret = SECRET }
     fatal: vi.fn(),
     debug: vi.fn(),
     trace: vi.fn(),
+    child: vi.fn(),
   }
+  // La implementación se asigna después y no en el literal: `child` devuelve el
+  // propio `log`, y una referencia a sí mismo dentro del inicializador dejaría
+  // el tipo en `any` implícito (TS7022) y rompería el build.
+  log.child.mockImplementation((nuevos: Record<string, unknown>) => {
+    Object.assign(bindings, nuevos)
+    return log
+  })
 
   const req = {
     rawBody,
@@ -94,7 +107,7 @@ function crearRequest({ evento, checksum, ubicacion = 'ambos', secret = SECRET }
     log,
   }
 
-  return { req: req as unknown as FastifyRequest, log, rawBody }
+  return { req: req as unknown as FastifyRequest, log, rawBody, bindings }
 }
 
 /** Doble de FastifyReply que registra el status y el cuerpo enviados. */
@@ -425,7 +438,7 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
       }),
     )
 
-    const { req, log, rawBody } = crearRequest()
+    const { req, log, rawBody, bindings } = crearRequest()
     const { reply, captura } = crearReply()
 
     await wompiIncomingHandler(req, reply)
@@ -439,8 +452,10 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
     // qué se recibió exactamente ante una posible manipulación del importe.
     const [contexto, mensaje] = log.fatal.mock.calls[0] as [Record<string, unknown>, string]
     expect(contexto.rawBody).toBe(rawBody)
-    expect(contexto.pspReference).toBe('wompi-txn-12345')
     expect(mensaje).toContain('INCORRECT_DETAILS')
+    // El pspReference ya no se repite a mano en cada contexto: lo lleva el
+    // logger hijo, así que va en TODA línea del handler, no solo en esta.
+    expect(bindings.pspReference).toBe('wompi-txn-12345')
   })
 
   it('responde 200 y loguea a nivel error cuando la transacción no existe en Saleor', async () => {
@@ -535,7 +550,7 @@ describe('wompiIncomingHandler — idempotencia del lado servidor', () => {
   it('responde 200 y deja registro cuando Saleor devuelve alreadyProcessed', async () => {
     reportTransactionEventMock.mockResolvedValue(resultadoOk({ alreadyProcessed: true }))
 
-    const { req, log } = crearRequest()
+    const { req, log, bindings } = crearRequest()
     const { reply, captura } = crearReply()
 
     await wompiIncomingHandler(req, reply)
@@ -547,9 +562,9 @@ describe('wompiIncomingHandler — idempotencia del lado servidor', () => {
     // (info, no warn) pero tiene que quedar registrado con pspReference y tipo.
     expect(log.info).toHaveBeenCalled()
     const registro = JSON.stringify(log.info.mock.calls)
-    expect(registro).toContain('wompi-txn-12345')
     expect(registro).toContain('CHARGE_SUCCESS')
     expect(registro).toContain('alreadyProcessed')
+    expect(bindings.pspReference).toBe('wompi-txn-12345')
   })
 
   it('no registra alreadyProcessed cuando el evento sí era nuevo', async () => {
