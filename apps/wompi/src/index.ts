@@ -6,6 +6,13 @@ import { transactionChargeHandler } from './webhooks/transaction-charge.js'
 import { transactionRefundHandler } from './webhooks/transaction-refund.js'
 import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
+import { verificarConfiguracionAlArranque } from './lib/config.js'
+
+// Fail-fast ANTES de crear el servidor: sin las variables obligatorias el
+// proceso no arranca. En un producto single-tenant replicable, una variable
+// ausente es el fallo normal del aprovisionamiento y tiene que ser un deploy
+// rojo — nunca una App que levanta aceptando pagos anónimos.
+verificarConfiguracionAlArranque()
 
 const app = Fastify({ logger: true })
 const APP_URL = (process.env.APP_URL ?? 'http://localhost:3001').replace(/\/$/, '')
