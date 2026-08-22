@@ -6,15 +6,25 @@ import { transactionChargeHandler } from './webhooks/transaction-charge.js'
 import { transactionRefundHandler } from './webhooks/transaction-refund.js'
 import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
-import { verificarConfiguracionAlArranque } from './lib/config.js'
+import { mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
+import { exigirAppRegistrada, manejadorRegistro, manejadorSalud } from './lib/registro.js'
 
 // Fail-fast ANTES de crear el servidor: sin las variables obligatorias el
 // proceso no arranca. En un producto single-tenant replicable, una variable
 // ausente es el fallo normal del aprovisionamiento y tiene que ser un deploy
 // rojo — nunca una App que levanta aceptando pagos anónimos.
+//
+// Ojo con el alcance: esto NO cubre `SALEOR_APP_TOKEN`, que es requisito de
+// *operación* y no de arranque. El porqué está en lib/config.ts.
 verificarConfiguracionAlArranque()
 
 const app = Fastify({ logger: true })
+
+// Aviso de modo degradado. Va inmediatamente después de crear el logger y antes
+// de registrar una sola ruta, para que sea lo primero que se lea en el log de
+// arranque y nadie confunda "levantó" con "está operativa".
+const avisoDegradado = mensajeModoDegradado()
+if (avisoDegradado) app.log.warn(avisoDegradado)
 const APP_URL = (process.env.APP_URL ?? 'http://localhost:3001').replace(/\/$/, '')
 
 // Capture raw body BEFORE JSON parse — needed for JWS signature verification.
@@ -141,14 +151,19 @@ app.get('/api/manifest', async () => ({
 }))
 
 // ─── Register (EnvAPL) ───────────────────────────────────────────────────────
-// Saleor POSTs the auth token here after installation.
-// Copy the token from Railway logs and set SALEOR_APP_TOKEN as env var.
-app.post('/api/register', async (request, reply) => {
-  const { auth_token } = request.body as { auth_token?: string }
-  if (!auth_token) return reply.status(400).send({ error: 'Missing auth_token' })
-  app.log.info(`SALEOR_APP_TOKEN=${auth_token}`)
-  return reply.status(200).send({ success: true })
-})
+// Saleor hace POST del token aquí tras instalar la App. Sin guardia de registro,
+// obviamente: es el endpoint que ENTREGA el token. El handler vive en
+// lib/registro.ts y NO escribe el valor del token en el log — registra el evento
+// y el origen. Un token en un log retenido es una credencial válida a la vista
+// de cualquiera con acceso de lectura al panel de despliegue.
+app.post('/api/register', manejadorRegistro)
+
+// ─── Healthcheck ─────────────────────────────────────────────────────────────
+// Sin guardia de registro a propósito: tiene que responder sobre todo cuando la
+// App NO está registrada, que es cuando hace falta enterarse. Reporta
+// `registered` para que un verde no pueda significar "viva pero incapaz de
+// procesar un pago" sin que se note.
+app.get('/api/health', manejadorSalud)
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
 app.get('/', async (_, reply) => {
@@ -165,16 +180,27 @@ app.get('/', async (_, reply) => {
   </div></body></html>`
 })
 
-// ─── Saleor webhook routes ────────────────────────────────────────────────────
-app.post('/api/webhooks/payment-gateway-initialize-session', paymentGatewayInitializeHandler)
-app.post('/api/webhooks/transaction-initialize-session', transactionInitializeHandler)
-app.post('/api/webhooks/transaction-process-session', transactionProcessHandler)
-app.post('/api/webhooks/transaction-charge-requested', transactionChargeHandler)
-app.post('/api/webhooks/transaction-refund-requested', transactionRefundHandler)
-app.post('/api/webhooks/transaction-cancelation-requested', transactionCancelHandler)
+// ─── Rutas que exigen App registrada ─────────────────────────────────────────
+// Todo lo de aquí abajo necesita hablar con Saleor: los webhooks de pago se
+// verifican contra Saleor y operan sobre sus transacciones, y el webhook
+// entrante de Wompi termina en `transactionEventReport`. Sin `SALEOR_APP_TOKEN`
+// ninguno puede completar su trabajo, así que responden 503 en vez de fallar a
+// medias (ver lib/registro.ts para el porqué del código).
+//
+// `preHandler` y no un hook global: la lista de lo que se degrada tiene que
+// quedar a la vista junto a las rutas, no escondida en una condición que haya
+// que ir a leer a otro sitio para saber qué se sirve sin token.
+const soloRegistrada = { preHandler: exigirAppRegistrada }
+
+app.post('/api/webhooks/payment-gateway-initialize-session', soloRegistrada, paymentGatewayInitializeHandler)
+app.post('/api/webhooks/transaction-initialize-session', soloRegistrada, transactionInitializeHandler)
+app.post('/api/webhooks/transaction-process-session', soloRegistrada, transactionProcessHandler)
+app.post('/api/webhooks/transaction-charge-requested', soloRegistrada, transactionChargeHandler)
+app.post('/api/webhooks/transaction-refund-requested', soloRegistrada, transactionRefundHandler)
+app.post('/api/webhooks/transaction-cancelation-requested', soloRegistrada, transactionCancelHandler)
 
 // ─── Wompi incoming webhook ───────────────────────────────────────────────────
-app.post('/api/webhooks/wompi-incoming', wompiIncomingHandler)
+app.post('/api/webhooks/wompi-incoming', soloRegistrada, wompiIncomingHandler)
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
