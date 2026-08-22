@@ -3,3 +3,7 @@ dist/
 *.js.map
 .env
 .env.local
+
+# Worktrees de sesiones de hardening. La sesion nocturna aborta si un sub-repo
+# tiene cambios sin commitear; un worktree suelto aqui bloquearia la corrida siguiente.
+.worktrees/
