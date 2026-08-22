@@ -1,0 +1,8 @@
+{
+  // Config de BUILD: idéntica a la base, pero excluye los tests para que
+  // `dist/` solo contenga el código publicable (sin index.test.js/.d.ts).
+  // La base (tsconfig.json) sí incluye los tests, para que
+  // `tsc --noEmit` (typecheck del monorepo) también los verifique.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts"]
+}
