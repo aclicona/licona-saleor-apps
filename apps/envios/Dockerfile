@@ -29,6 +29,12 @@ COPY apps/envios ./apps/envios
 RUN pnpm install --frozen-lockfile
 
 # Build the app
+# El paquete compartido se construye ANTES que la App: su package.json apunta a
+# ./dist, que no existe hasta compilarlo, asi que `tsc` de la App falla con
+# TS2307 "Cannot find module '@licona/webhook-utils'". Es el mismo motivo por el
+# que un clone nuevo no pasa el typecheck sin `pnpm --filter @licona/webhook-utils build`.
+RUN pnpm --filter @licona/webhook-utils build
+
 WORKDIR /app/apps/envios
 RUN pnpm run build
 
