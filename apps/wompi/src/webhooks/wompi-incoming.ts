@@ -8,6 +8,7 @@ import {
 } from '../lib/saleor-errors.js'
 import { CABECERA_CHECKSUM, verificarFirmaWompi, type EventoFirmado } from '../lib/wompi-signature.js'
 import { camposDeCorrelacionWompi } from '../lib/correlacion.js'
+import { transactionIdDesdeReferencia } from '../lib/referencia.js'
 
 const WOMPI_TO_SALEOR: Record<string, 'CHARGE_SUCCESS' | 'CHARGE_FAILURE'> = {
   APPROVED: 'CHARGE_SUCCESS',
@@ -36,15 +37,25 @@ interface WompiEvent extends EventoFirmado {
  *     sí → 5xx (Wompi reintenta; Saleor deduplica el reintento gratis)
  *     no → 2xx + log ruidoso (ningún reintento va a converger; que lo vea un humano)
  *
- * | Fallo                                    | Respuesta | Señal concreta que lo distingue          |
- * |------------------------------------------|-----------|------------------------------------------|
- * | Firma inválida                           | 401       | el SHA-256 documentado no coincide       |
- * | Saleor caído/timeout/red/5xx/429         | 500       | la llamada LANZA → clasificada TRANSITORIO |
+ * Y la regla que decide, dentro de ese 2xx, cuánto ruido hace el log:
+ *
+ *   **la severidad la decide el importe en riesgo, no el código de error.**
+ *
+ * Por eso el mismo fallo aparece abajo con dos severidades según el estado del
+ * pago: un evento huérfano de una transacción DECLINED es ruido operativo, y el
+ * mismo evento huérfano sobre un cobro APROBADO es dinero que nadie va a
+ * acreditar. Tratar los dos como `fatal` acabaría con nadie mirando los `fatal`.
+ *
+ * | Fallo                                    | Respuesta   | Señal concreta que lo distingue              |
+ * |------------------------------------------|-------------|----------------------------------------------|
+ * | Firma inválida                           | 401         | el SHA-256 documentado no coincide           |
+ * | Saleor caído/timeout/red/5xx/429         | 500         | la llamada LANZA → clasificada TRANSITORIO   |
  * | Token de App inválido o expirado         | 500 + error | la llamada LANZA → clasificada AUTENTICACION |
- * | Importe inconsistente (INCORRECT_DETAILS)| 200 + fatal | código en `errors[]` de la mutación     |
- * | Transacción inexistente en Saleor        | 200 + error | código NOT_FOUND en `errors[]`          |
- * | Importe de Wompi corrupto                | 200 + fatal | `centsToCop` lanza                      |
- * | Estado de Wompi sin mapeo                | 200 + info  | `WOMPI_TO_SALEOR[status]` undefined     |
+ * | Importe inconsistente (INCORRECT_DETAILS)| 200 + fatal | código en `errors[]` de la mutación          |
+ * | Referencia que no es un ID de Saleor     | 200 + fatal si APPROVED, warn si no | `transactionIdDesdeReferencia` devuelve undefined |
+ * | Transacción inexistente en Saleor        | 200 + fatal si CHARGE_SUCCESS, error si no | código NOT_FOUND en `errors[]` |
+ * | Importe de Wompi corrupto                | 200 + fatal | `centsToCop` lanza                           |
+ * | Estado de Wompi sin mapeo                | 200 + info  | `WOMPI_TO_SALEOR[status]` undefined          |
  *
  * El único `try/catch` envuelve exclusivamente la llamada a Saleor, y por eso
  * puede responder 500 sin ser un catch genérico: todo lo que falla ahí dentro
@@ -120,10 +131,58 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     return reply.status(200).send({ ok: true })
   }
 
+  // La referencia la manda Wompi en el cuerpo, así que puede no ser un ID de
+  // transacción de Saleor por causas perfectamente reales: una cuenta de
+  // comercio compartida con otra integración, una transacción de prueba creada a
+  // mano en el panel, un cruce de entornos. Hasta ahora se le pasaba tal cual a
+  // `transactionEventReport` y lo único que se veía era un NOT_FOUND genérico,
+  // que no distingue "referencia ajena" de "la transacción se borró de Saleor".
+  //
+  // Va DESPUÉS de la conversión del importe y no antes, aunque los dos fallos
+  // sean permanentes y respondan 200. La razón no es el orden lógico sino el
+  // contenido de la alerta: cuando la referencia es basura y el cobro está
+  // APROBADO, lo primero que necesita saber un humano es CUÁNTO dinero quedó sin
+  // destino, y ese importe solo existe una vez que `centsToCop` lo ha validado.
+  // Al revés, el fatal diría "hay un cobro huérfano" sin poder decir de cuánto.
+  // Y si además el importe viniera corrupto, gana esa alerta, que es la que dice
+  // que el payload entero no es de fiar.
+  const transactionIdSaleor = transactionIdDesdeReferencia(txn.reference)
+  if (!transactionIdSaleor) {
+    // 200 porque ningún reintento converge: Wompi reenviaría exactamente la
+    // misma referencia. Un 500 aquí sería un bucle infinito de reintentos.
+    //
+    // La severidad la decide el importe en riesgo, no el código de error. Con
+    // APPROVED hay dinero cobrado que Saleor no va a poder atribuir a ninguna
+    // transacción: mismo trato que INCORRECT_DETAILS, `fatal` y con el payload
+    // crudo, que es la única prueba de qué se recibió exactamente. Con cualquier
+    // otro estado esto es ruido esperable de una cuenta compartida, y un `fatal`
+    // incondicional convertiría ese ruido en páginas a un humano de madrugada.
+    if (txn.status === 'APPROVED') {
+      log.fatal(
+        { referencia: txn.reference, tipo: saleorEventType, importeCop, rawBody },
+        'Pago APROBADO cuya referencia no es un ID de transacción de Saleor: el cobro existe en Wompi ' +
+          'pero no hay transacción a la que acreditarlo, y el evento no se reporta. ' +
+          'Ningún reintento lo arregla — es dinero cobrado sin destino, requiere revisión humana inmediata',
+      )
+    } else {
+      log.warn(
+        { referencia: txn.reference, tipo: saleorEventType, estadoWompi: txn.status, importeCop },
+        'Referencia de Wompi que no es un ID de transacción de Saleor en un pago no aprobado: ' +
+          'evento ajeno a esta integración (cuenta de comercio compartida, prueba manual o cruce de entornos). ' +
+          'No hay dinero en riesgo: no se reporta a Saleor y no se pide reintento',
+      )
+    }
+    return reply.status(200).send({ ok: true })
+  }
+
   let resultado
   try {
     resultado = await reportTransactionEvent({
-      transactionId: txn.reference,
+      // El ID verificado, no `txn.reference` otra vez: así lo que llega a la
+      // mutación es el valor que la validación acaba de garantizar, y no una
+      // coincidencia entre dos lecturas del mismo campo que alguien podría
+      // desincronizar más adelante sin que ningún test se entere.
+      transactionId: transactionIdSaleor,
       type: saleorEventType,
       amount: importeCop,
       pspReference: txn.id,
@@ -171,11 +230,30 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
           'Posible inconsistencia de Wompi o manipulación del importe — requiere revisión humana inmediata',
       )
     } else if (codigos.includes(CODIGO_TRANSACCION_INEXISTENTE)) {
-      log.error(
-        { referencia: txn.reference, errores: resultado.errors },
-        'La transacción referenciada no existe en Saleor (cruce de entornos o referencia basura). ' +
-          'Permanente: no se pide reintento',
-      )
+      // Aquí la referencia SÍ tenía forma de ID de Saleor —la validación de más
+      // arriba la dejó pasar— pero Saleor no la reconoce: la transacción se
+      // borró, o el evento viene de otra instancia con el mismo formato de ID.
+      //
+      // Se aplica el mismo criterio que al resto del handler: la severidad la
+      // decide el importe en riesgo, no el código de error. Un CHARGE_SUCCESS es
+      // un pago que Wompi ya confirmó y que no se va a acreditar en ninguna
+      // orden — el mismo caso que INCORRECT_DETAILS, dinero perdido, y por eso
+      // lleva el `rawBody` como prueba. Un CHARGE_FAILURE no mueve dinero: es un
+      // evento huérfano que hay que mirar, no una emergencia.
+      if (saleorEventType === 'CHARGE_SUCCESS') {
+        log.fatal(
+          { referencia: txn.reference, tipo: saleorEventType, importeCop, errores: resultado.errors, rawBody },
+          'NOT_FOUND sobre un pago APROBADO: Wompi confirmó el cobro y Saleor no reconoce la transacción, ' +
+            'así que el pago no queda acreditado en ninguna orden. Permanente: no se pide reintento — ' +
+            'es dinero cobrado y perdido, requiere revisión humana inmediata',
+        )
+      } else {
+        log.error(
+          { referencia: txn.reference, tipo: saleorEventType, errores: resultado.errors },
+          'La transacción referenciada no existe en Saleor (cruce de entornos o transacción borrada). ' +
+            'Sin dinero en riesgo porque el pago no fue aprobado. Permanente: no se pide reintento',
+        )
+      }
     } else {
       // Los demás códigos de transactionEventReport (INVALID, REQUIRED,
       // GRAPHQL_ERROR, ALREADY_EXISTS) son validaciones de payload o de
