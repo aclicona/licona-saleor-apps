@@ -18,6 +18,16 @@ const reportTransactionEventMock = vi.mocked(reportTransactionEvent)
 const SECRET = 'secreto-de-eventos-de-prueba'
 
 /**
+ * La referencia que Wompi devuelve en un evento legítimo: el ID global de la
+ * transacción de Saleor, `base64("TransactionItem:<uuid>")`, tal y como lo puso
+ * `transaction-initialize`. Es el literal medido contra el fork (72 caracteres),
+ * no un valor construido con `referenciaParaWompi`: si el formato cambiara,
+ * generarlo aquí con la misma función que lo produce dejaría estos tests en
+ * verde mientras el camino real se rompe.
+ */
+const REFERENCIA_SALEOR = 'VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzLTgwYzA3NmExNzUzYg=='
+
+/**
  * Reimplementación INDEPENDIENTE del checksum documentado por Wompi
  * (https://docs.wompi.co/en/docs/colombia/eventos/): SHA-256 sobre la
  * concatenación sin separadores de los valores de `signature.properties`, el
@@ -137,7 +147,7 @@ function eventoWompi(
       transaction: {
         id: 'wompi-txn-12345',
         status: 'APPROVED',
-        reference: 'VHJhbnNhY3Rpb246YWJj',
+        reference: REFERENCIA_SALEOR,
         amount_in_cents: 12_000_000,
         ...overrides,
       },
@@ -153,7 +163,7 @@ function eventoWompi(
 function resultadoOk(overrides: Partial<{ alreadyProcessed: boolean; errors: unknown[] }> = {}) {
   return {
     alreadyProcessed: false,
-    transactionId: 'VHJhbnNhY3Rpb246YWJj',
+    transactionId: REFERENCIA_SALEOR,
     errors: [],
     ...overrides,
   } as Awaited<ReturnType<typeof reportTransactionEvent>>
@@ -319,7 +329,10 @@ describe('wompiIncomingHandler — camino feliz', () => {
         // El pspReference DEBE ser el id de Wompi: es estable entre reintentos
         // y es la clave con la que Saleor deduplica del lado servidor.
         pspReference: 'wompi-txn-12345',
-        transactionId: 'VHJhbnNhY3Rpb246YWJj',
+        // El transactionId es la referencia decodificada y verificada, no el
+        // campo crudo del evento: el valor coincide, pero lo que se afirma es
+        // que pasó por la validación.
+        transactionId: REFERENCIA_SALEOR,
         type: 'CHARGE_SUCCESS',
       }),
     )
@@ -458,20 +471,50 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
     expect(bindings.pspReference).toBe('wompi-txn-12345')
   })
 
-  it('responde 200 y loguea a nivel error cuando la transacción no existe en Saleor', async () => {
+  it('responde 200 y loguea a nivel CRÍTICO cuando Saleor no conoce la transacción de un pago aprobado', async () => {
+    // La severidad la decide el importe en riesgo, no el código de error: un
+    // CHARGE_SUCCESS con NOT_FOUND es un cobro que Wompi ya confirmó y que no se
+    // va a acreditar en ninguna orden. Es dinero perdido, igual que
+    // INCORRECT_DETAILS, y tiene que despertar a alguien.
     reportTransactionEventMock.mockResolvedValue(
       resultadoOk({
         errors: [{ field: 'id', message: "Couldn't resolve to an object.", code: 'NOT_FOUND' }],
       }),
     )
 
-    const { req, log } = crearRequest()
+    const { req, log, rawBody } = crearRequest()
+    const { reply, captura } = crearReply()
+
+    await wompiIncomingHandler(req, reply)
+
+    expect(captura.status).toBe(200)
+    expect(log.fatal).toHaveBeenCalled()
+    expect(log.error).not.toHaveBeenCalled()
+
+    // El payload crudo es la única prueba de qué se recibió exactamente, y sin
+    // él la revisión humana empieza a ciegas.
+    const [contexto, mensaje] = log.fatal.mock.calls[0] as [Record<string, unknown>, string]
+    expect(contexto.rawBody).toBe(rawBody)
+    expect(mensaje).toContain('NOT_FOUND')
+  })
+
+  it('responde 200 y loguea a nivel error cuando Saleor no conoce la transacción de un pago RECHAZADO', async () => {
+    // Mismo código de error, otra severidad: un CHARGE_FAILURE huérfano no mueve
+    // dinero. Subirlo a fatal ahogaría las alertas que sí lo son.
+    reportTransactionEventMock.mockResolvedValue(
+      resultadoOk({
+        errors: [{ field: 'id', message: "Couldn't resolve to an object.", code: 'NOT_FOUND' }],
+      }),
+    )
+
+    const { req, log } = crearRequest({ evento: eventoWompi({ status: 'DECLINED' }) })
     const { reply, captura } = crearReply()
 
     await wompiIncomingHandler(req, reply)
 
     expect(captura.status).toBe(200)
     expect(log.error).toHaveBeenCalled()
+    expect(log.fatal).not.toHaveBeenCalled()
   })
 
   it('responde 200 y loguea a nivel error ante cualquier otro error de negocio', async () => {
@@ -519,6 +562,106 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
 
     expect(captura.status).toBe(200)
     expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('wompiIncomingHandler — referencia que no es un ID de transacción de Saleor', () => {
+  // El cuerpo lo manda Wompi, no esta App: la referencia puede venir de una
+  // cuenta de comercio compartida con otra integración, de una transacción de
+  // prueba creada a mano en el panel o de un cruce de entornos. Reportarla a
+  // Saleor solo produce un NOT_FOUND mudo que no dice de qué se trata.
+
+  it('NO llama a Saleor y responde 200 cuando la referencia es basura y el pago está APROBADO', async () => {
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    const { req, log, rawBody } = crearRequest({
+      evento: eventoWompi({ reference: 'referencia-de-otra-integracion' }),
+    })
+    const { reply, captura } = crearReply()
+
+    await wompiIncomingHandler(req, reply)
+
+    // Lo que importa: la mutación no se lanza siquiera. Antes se lanzaba y se
+    // comía un NOT_FOUND genérico, indistinguible de una transacción borrada.
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+    // 200 porque ningún reintento converge: Wompi reenviaría la misma referencia.
+    expect(captura.status).toBe(200)
+
+    // Dinero cobrado sin destino en Saleor: mismo trato que INCORRECT_DETAILS,
+    // fatal y con el payload crudo como prueba.
+    expect(log.fatal).toHaveBeenCalled()
+    const [contexto] = log.fatal.mock.calls[0] as [Record<string, unknown>, string]
+    expect(contexto.rawBody).toBe(rawBody)
+    expect(contexto.referencia).toBe('referencia-de-otra-integracion')
+  })
+
+  it('NO llama a Saleor y se queda en warn cuando la referencia es basura y el pago está RECHAZADO', async () => {
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    const { req, log } = crearRequest({
+      evento: eventoWompi({ status: 'DECLINED', reference: 'referencia-de-otra-integracion' }),
+    })
+    const { reply, captura } = crearReply()
+
+    await wompiIncomingHandler(req, reply)
+
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+    expect(captura.status).toBe(200)
+
+    // Sin dinero en juego esto es ruido esperable de una cuenta compartida. Un
+    // fatal incondicional lo convertiría en páginas a un humano de madrugada y
+    // acabaría con nadie mirando los fatal de verdad.
+    expect(log.warn).toHaveBeenCalled()
+    expect(log.fatal).not.toHaveBeenCalled()
+  })
+
+  it('descarta un base64 válido que decodifica a otro tipo de Saleor', async () => {
+    // `base64("Checkout:1")` decodifica limpiamente: una comprobación que solo
+    // mirara "¿es base64?" lo dejaría pasar. Un id de checkout no resuelve en
+    // transactionEventReport.
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    const { req } = crearRequest({ evento: eventoWompi({ reference: 'Q2hlY2tvdXQ6MQ==' }) })
+    const { reply, captura } = crearReply()
+
+    await wompiIncomingHandler(req, reply)
+
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+    expect(captura.status).toBe(200)
+  })
+
+  it('sigue reportando a Saleor con el ID correcto cuando la referencia es legítima', async () => {
+    // Contrapeso de los dos anteriores: la validación tiene que dejar pasar el
+    // camino feliz intacto. Un filtro que rechazara de más sería peor que el
+    // fallo que evita — perdería confirmaciones de pagos reales.
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    const { req, log } = crearRequest()
+    const { reply, captura } = crearReply()
+
+    await wompiIncomingHandler(req, reply)
+
+    expect(captura.status).toBe(200)
+    expect(reportTransactionEventMock).toHaveBeenCalledTimes(1)
+    expect(reportTransactionEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({ transactionId: REFERENCIA_SALEOR, type: 'CHARGE_SUCCESS' }),
+    )
+    expect(log.fatal).not.toHaveBeenCalled()
+  })
+
+  it('lleva el transactionId en la correlación de TODA línea del evento legítimo', async () => {
+    // El logger hijo se construye con `camposDeCorrelacionWompi`: la referencia
+    // validada cierra el hilo que antes se cortaba justo en el salto que
+    // confirma el dinero.
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    const { req, bindings } = crearRequest()
+    const { reply } = crearReply()
+
+    await wompiIncomingHandler(req, reply)
+
+    expect(bindings.transactionId).toBe(REFERENCIA_SALEOR)
+    expect(bindings.pspReference).toBe('wompi-txn-12345')
   })
 })
 

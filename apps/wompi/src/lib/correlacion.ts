@@ -31,6 +31,8 @@
  * ya es un Order, donde el checkoutId genuinamente no existe.
  */
 
+import { transactionIdDesdeReferencia } from './referencia.js'
+
 /** Campos canónicos. Solo aparecen los que el payload traía de verdad. */
 export interface CamposCorrelacion {
   checkoutId?: string
@@ -107,12 +109,29 @@ export function camposDeCorrelacion(cuerpo: unknown): CamposCorrelacion {
  * clave de unión con el resto de la cadena es el id de la transacción en Wompi,
  * que es exactamente el `pspReference` que la App reporta a Saleor.
  *
- * `data.transaction.reference` NO se mapea a `transactionId` a propósito: hoy
- * ese campo lo rellena `transaction-initialize` con `idempotencyKey ?? id`, así
- * que puede no ser un id de transacción de Saleor. Etiquetarlo como tal daría
- * una correlación falsa.
+ * `data.transaction.reference` **sí** se mapea a `transactionId`, pero solo
+ * cuando `transactionIdDesdeReferencia` lo valida. Antes no se mapeaba nunca, y
+ * el motivo era bueno: `transaction-initialize` rellenaba ese campo con
+ * `idempotencyKey ?? id`, un valor que el comprador controla desde el
+ * storefront, así que etiquetarlo como id de Saleor podía dar una correlación
+ * falsa —peor que no tener correlación, porque parece un dato y no lo es—.
  *
- * Contrato: NUNCA lanza.
+ * Esa justificación caducó: la referencia la construye ahora
+ * `referenciaParaWompi` a partir del ID de transacción, y hay una inversa que la
+ * verifica. Lo que hace seguro el mapeo no es confiar en el emisor (el cuerpo
+ * sigue siendo de Wompi y sigue sin verificar aquí) sino que la referencia que
+ * no supera la verificación se descarta en silencio. El miedo original queda
+ * intacto y a cambio se cierra el hueco: este era el único evento de la cadena
+ * del que la App no sabía sacar el `transactionId`.
+ *
+ * Ojo con el orden: `valorUtil` va ANTES de decodificar, no después. El cuerpo
+ * llega de fuera y aún sin firmar, así que una `reference` de 10 MB es un input
+ * posible; decodificarla entera en base64 para descubrir que no empieza por
+ * `TransactionItem:` sería trabajo y memoria regalados a quien la mandó. Una
+ * referencia real mide 72 caracteres, muy por debajo de LONGITUD_MAXIMA_VALOR.
+ *
+ * Contrato: NUNCA lanza. `transactionIdDesdeReferencia` también lo garantiza,
+ * y por eso se puede llamar desde aquí sin envolverla en un try.
  */
 export function camposDeCorrelacionWompi(evento: unknown): CamposCorrelacion {
   const campos: CamposCorrelacion = {}
@@ -120,6 +139,10 @@ export function camposDeCorrelacionWompi(evento: unknown): CamposCorrelacion {
   const transaccion = prop(prop(evento, 'data'), 'transaction')
   const pspReference = valorUtil(prop(transaccion, 'id'))
   if (pspReference) campos.pspReference = pspReference
+
+  const referencia = valorUtil(prop(transaccion, 'reference'))
+  const transactionId = referencia === undefined ? undefined : transactionIdDesdeReferencia(referencia)
+  if (transactionId) campos.transactionId = transactionId
 
   return campos
 }

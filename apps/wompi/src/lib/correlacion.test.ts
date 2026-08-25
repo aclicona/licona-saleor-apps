@@ -14,6 +14,15 @@ import {
  */
 const NOMBRES_CANONICOS = ['checkoutId', 'transactionId', 'pspReference']
 
+/**
+ * Referencia tal y como viaja a Wompi y vuelve: el ID global de una transacción
+ * de Saleor, `base64("TransactionItem:<uuid>")`. Se escribe el literal en vez de
+ * construirlo con `referenciaParaWompi` a propósito — si el formato cambiara,
+ * generarlo con la misma función que se está probando dejaría el test en verde
+ * mientras la correlación real se rompe.
+ */
+const REFERENCIA_SALEOR = 'VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzLTgwYzA3NmExNzUzYg=='
+
 describe('camposDeCorrelacion — payload de Saleor', () => {
   it('extrae las tres claves de TRANSACTION_INITIALIZE_SESSION, que es el evento que ata el hilo', () => {
     // Es el único evento del manifiesto con checkout y transacción a la vez.
@@ -122,16 +131,60 @@ describe('camposDeCorrelacionWompi — evento entrante de la pasarela', () => {
     expect(campos).toEqual({ pspReference: 'wompi-txn-12345' })
   })
 
-  it('NO mapea data.transaction.reference a transactionId', () => {
-    // `reference` lo rellena transaction-initialize con `idempotencyKey ?? id`,
-    // así que puede no ser un id de transacción de Saleor. Etiquetarlo como tal
-    // daría una correlación falsa, que es peor que no tenerla.
+  it('mapea data.transaction.reference a transactionId cuando es un ID de transacción de Saleor', () => {
+    // Este era el único evento de la cadena sin `transactionId`: el hilo se
+    // cortaba justo en el salto que confirma el dinero. La referencia la
+    // construye `referenciaParaWompi` a partir del ID de la transacción, así que
+    // el dato está ahí y correlacionarlo es legítimo.
     const campos = camposDeCorrelacionWompi({
-      data: { transaction: { id: 'wompi-txn-12345', reference: 'clave-de-idempotencia-del-storefront' } },
+      event: 'transaction.updated',
+      data: { transaction: { id: 'wompi-txn-12345', status: 'APPROVED', reference: REFERENCIA_SALEOR } },
+    })
+
+    expect(campos).toEqual({ pspReference: 'wompi-txn-12345', transactionId: REFERENCIA_SALEOR })
+  })
+
+  it('NO mapea a transactionId una referencia que no es un ID de transacción de Saleor', () => {
+    // El cuerpo lo manda Wompi y puede traer una referencia ajena (cuenta de
+    // comercio compartida, prueba manual en el panel). Etiquetarla como
+    // `transactionId` daría una correlación falsa, que es peor que no tenerla:
+    // un humano buscaría en Saleor un id que nunca existió.
+    const campos = camposDeCorrelacionWompi({
+      data: { transaction: { id: 'wompi-txn-12345', reference: 'referencia-de-otra-integracion' } },
     })
 
     expect(campos).toEqual({ pspReference: 'wompi-txn-12345' })
     expect('transactionId' in campos).toBe(false)
+  })
+
+  it('NO mapea a transactionId un base64 válido que decodifica a otro tipo de Saleor', () => {
+    // `base64("Checkout:1")` decodifica limpiamente, así que un filtro que solo
+    // mirara "¿es base64?" lo daría por bueno. Lo que se exige es el tipo relay
+    // correcto, porque el id de un checkout NO resuelve en
+    // `transactionEventReport`.
+    const campos = camposDeCorrelacionWompi({
+      data: { transaction: { id: 'wompi-txn-12345', reference: 'Q2hlY2tvdXQ6MQ==' } },
+    })
+
+    expect(campos).toEqual({ pspReference: 'wompi-txn-12345' })
+  })
+
+  it('una referencia real de 72 caracteres cabe holgadamente en el tope de longitud', () => {
+    // El tope existe porque el cuerpo se lee antes de verificar la firma. Si
+    // alguien lo bajara para "apretar" el filtro, la correlación del camino
+    // feliz desaparecería en silencio: esto lo pone rojo antes.
+    expect(REFERENCIA_SALEOR.length).toBe(72)
+    expect(REFERENCIA_SALEOR.length).toBeLessThanOrEqual(LONGITUD_MAXIMA_VALOR)
+  })
+
+  it('descarta una referencia kilométrica sin llegar a decodificarla', () => {
+    // El tope se aplica ANTES del base64: una referencia de megabytes no debe
+    // convertirse en una decodificación de megabytes por cada evento entrante.
+    const enorme = 'x'.repeat(LONGITUD_MAXIMA_VALOR + 1)
+
+    expect(camposDeCorrelacionWompi({ data: { transaction: { id: 'wompi-txn-12345', reference: enorme } } })).toEqual({
+      pspReference: 'wompi-txn-12345',
+    })
   })
 
   it.each([
@@ -142,6 +195,10 @@ describe('camposDeCorrelacionWompi — evento entrante de la pasarela', () => {
     ['sin transaction', { data: {} }],
     ['transaction sin id', { data: { transaction: { status: 'APPROVED' } } }],
     ['id no textual', { data: { transaction: { id: 999 } } }],
+    ['reference no textual', { data: { transaction: { reference: 999 } } }],
+    ['reference vacía', { data: { transaction: { reference: '' } } }],
+    ['reference basura no base64', { data: { transaction: { reference: '@@@@@@' } } }],
+    ['reference con solo el prefijo', { data: { transaction: { reference: 'VHJhbnNhY3Rpb25JdGVtOg==' } } }],
   ])('no lanza y devuelve {} con evento basura: %s', (_titulo, evento) => {
     expect(() => camposDeCorrelacionWompi(evento)).not.toThrow()
     expect(camposDeCorrelacionWompi(evento)).toEqual({})

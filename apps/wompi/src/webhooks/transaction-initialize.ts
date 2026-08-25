@@ -3,13 +3,20 @@ import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
+import { referenciaParaWompi } from '../lib/referencia.js'
 
 interface TransactionInitializePayload {
   transaction: { id: string; pspReference: string }
   action: { amount: number; currency: string }
+  // `data` es el `paymentData` que compone el storefront: viaja por el
+  // navegador del comprador, así que NADA de aquí puede acabar siendo la
+  // referencia que se manda a Wompi — sería meter un valor arbitrario dentro
+  // del camino del dinero. Antes se leía un `idempotencyKey` de aquí, campo
+  // que además la subscription del manifiesto nunca pide (`src/index.ts:82`):
+  // el `idempotencyKey` real de Saleor es un argumento de nivel superior de
+  // `transactionInitialize`, no parte de `data`.
   data?: {
     method?: string
-    idempotencyKey?: string
     // NEQUI
     phone_number?: string
     // PSE + BANCOLOMBIA_TRANSFER
@@ -43,7 +50,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   const payload = req.body as TransactionInitializePayload
   const { transaction, action, data, sourceObject } = payload
 
-  const reference = data?.idempotencyKey ?? transaction.id
+  const reference = referenciaParaWompi(transaction.id)
   const method = data?.method ?? 'BANCOLOMBIA_TRANSFER'
   const phoneNumber = data?.phone_number
   const customerEmail = sourceObject?.email ?? sourceObject?.billingAddress?.email ?? ''
