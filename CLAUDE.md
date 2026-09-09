@@ -1,6 +1,6 @@
 # saleor-apps
 
-> **Proceso:** Las reglas de desarrollo no negociables están en `../CLAUDE.md` (sección "Proceso de Desarrollo"). Leerlas antes de cualquier sesión. En resumen: planear antes de codificar, consultar antes de decidir, usar skills de Superpowers/ECC, validar exhaustivamente antes de reportar éxito.
+> **Proceso:** Las reglas de desarrollo no negociables están en `../CLAUDE.md` (sección "Proceso de Desarrollo"). Leerlas antes de cualquier sesión. En resumen: planear antes de codificar, consultar antes de decidir, usar skills y agentes de ECC (`ecc:*`), validar exhaustivamente antes de reportar éxito.
 
 
 Monorepo pnpm de Saleor Apps para el e-commerce colombiano. Cada app es un microservicio independiente que se comunica con Saleor via webhooks síncronos (JWS/RS256).
