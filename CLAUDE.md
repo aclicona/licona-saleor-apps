@@ -65,6 +65,11 @@ pnpm --filter @licona/app-envios test
 pnpm --filter "@licona/*" build
 ```
 
+**Logging en `apps/envios`:** el handler de envíos usa el mismo patrón que los de wompi: `req.log.child`
+con `webhook` y las claves canónicas de correlación (`checkoutId`, en `lib/correlacion.ts`), y los
+fallos de firma se escriben como `log.warn({ motivo: err.reason }, err.message)` — no con `msg` dentro
+del objeto.
+
 ---
 
 ## Payment App Pattern
