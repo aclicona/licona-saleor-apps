@@ -1,0 +1,7 @@
+{
+  // Config de BUILD: igual que la base pero sin los tests, para que `dist/`
+  // (lo que copia el Dockerfile a la imagen) solo lleve código publicable.
+  // La base (tsconfig.json) sí incluye los tests: `tsc --noEmit` los verifica.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}
