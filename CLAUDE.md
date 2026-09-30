@@ -65,6 +65,11 @@ pnpm --filter @licona/app-envios test
 pnpm --filter "@licona/*" build
 ```
 
+**CI:** `.github/workflows/ci.yml` corre en cada PR y push a `main`: `pnpm install --frozen-lockfile`,
+`pnpm -r build` (`webhook-utils` debe compilarse antes que las Apps), `pnpm typecheck` y `pnpm test`.
+Node sale de `.nvmrc` y pnpm de `packageManager`. No despliega. Para reproducirlo en local, ejecutar
+esos cuatro comandos en ese orden.
+
 ---
 
 ## Payment App Pattern
