@@ -65,6 +65,9 @@ pnpm --filter @licona/app-envios test
 pnpm --filter "@licona/*" build
 ```
 
+`build` compila con `tsconfig.build.json` (excluye `*.test.ts`, así `dist/` y la imagen de
+producción no llevan tests). `tsconfig.json` sí los incluye: `pnpm typecheck` los verifica.
+
 ---
 
 ## Payment App Pattern
