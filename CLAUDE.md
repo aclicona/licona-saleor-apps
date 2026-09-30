@@ -65,6 +65,11 @@ pnpm --filter @licona/app-envios test
 pnpm --filter "@licona/*" build
 ```
 
+**Dockerfiles:** `--frozen-lockfile` exige los manifiestos de TODAS las Apps del workspace, y Docker
+no permite globs que conserven directorios, así que cada `Dockerfile` los lista a mano. Al añadir una
+App hay que añadirla en los de las demás; `pnpm check:dockerfiles` falla si falta alguna (conviene
+incluirlo en CI).
+
 ---
 
 ## Payment App Pattern
