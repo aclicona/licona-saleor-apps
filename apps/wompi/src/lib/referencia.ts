@@ -60,12 +60,19 @@ const PREFIJO_TRANSACTION_ITEM = 'TransactionItem:'
  * Construye la referencia que se le manda a Wompi a partir del ID de
  * transacción de Saleor.
  *
- * Hoy es la identidad. **No** es un envoltorio inútil: es el único punto por el
+ * Por defecto es la identidad. Con `WOMPI_REFERENCIA_CODIFICADA=true` (B-397)
+ * codifica el ID global a base64url sin relleno, porque Wompi documenta
+ * referencias alfanuméricas y `=` no lo es. El flag existe porque la
+ * aceptación real de Wompi solo se puede confirmar con credenciales de
+ * sandbox; la inversa entiende AMBOS formatos, así que activarlo o
+ * desactivarlo no deja pagos en vuelo sin resolver. **No** es un envoltorio inútil: es el único punto por el
  * que puede entrar una codificación, y su existencia es lo que hace verificable
  * el round-trip con `transactionIdDesdeReferencia`.
  */
-export function referenciaParaWompi(transactionId: string): string {
-  return transactionId
+export function referenciaParaWompi(transactionId: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (env.WOMPI_REFERENCIA_CODIFICADA !== 'true') return transactionId
+  // base64url sin relleno: alfabeto [A-Za-z0-9_-], sin el `=` que Wompi no documenta.
+  return Buffer.from(transactionId, 'utf8').toString('base64url')
 }
 
 /**
@@ -92,6 +99,15 @@ export function referenciaParaWompi(transactionId: string): string {
 export function transactionIdDesdeReferencia(referencia: unknown): string | undefined {
   if (typeof referencia !== 'string' || referencia === '') return undefined
 
+  // Formato crudo (ID global tal cual) o, si no lo es, el codificado con
+  // `WOMPI_REFERENCIA_CODIFICADA`: un solo nivel de base64url por encima.
+  const crudo = idGlobalValido(referencia)
+  if (crudo !== undefined) return crudo
+  if (!/^[A-Za-z0-9_-]+$/.test(referencia)) return undefined
+  return idGlobalValido(Buffer.from(referencia, 'base64url').toString('utf8'))
+}
+
+function idGlobalValido(referencia: string): string | undefined {
   let decodificado: string
   try {
     decodificado = Buffer.from(referencia, 'base64').toString('utf8')
