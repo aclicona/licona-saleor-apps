@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { appRegistrada } from './config.js'
+import { verificarCadena } from '@licona/webhook-utils'
+import { appRegistrada, variablesDeOperacionFaltantes, variablesObligatoriasFaltantes } from './config.js'
 
 /**
  * Estado de registro de la App: arranque degradado y endpoints que lo respetan.
@@ -64,6 +65,32 @@ export async function manejadorSalud() {
   const registered = appRegistrada()
   return { status: registered ? 'ok' : 'degraded', registered }
 }
+
+/**
+ * Healthcheck de CADENA (`GET /api/health/ready`): config completa, Saleor
+ * alcanzable y JWKS descargable. **503** si falla cualquier eslabón, con el
+ * detalle de cuál.
+ *
+ * Es aparte de `/api/health` a propósito: ese es de *vida* y debe seguir en 200
+ * en modo degradado (ver su comentario), o el orquestador mataría la App antes
+ * de que Saleor pueda entregarle el token. Este es de *disponibilidad real*:
+ * para alertas y monitoreo externo, NO para el liveness probe del orquestador.
+ * Hace red (con timeout), por eso no se ata al liveness.
+ *
+ * `fetchFn` se inyecta para probarlo con dobles, sin Saleor real.
+ */
+export function crearManejadorListo(fetchFn?: typeof fetch) {
+  return async function manejadorListo(_req: FastifyRequest, reply: FastifyReply) {
+    const resultado = await verificarCadena({
+      saleorApiUrl: process.env.SALEOR_API_URL ?? '',
+      variablesFaltantes: [...variablesObligatoriasFaltantes(process.env), ...variablesDeOperacionFaltantes()],
+      fetchFn,
+    })
+    return reply.status(resultado.ok ? 200 : 503).send({ status: resultado.ok ? 'ok' : 'unavailable', ...resultado })
+  }
+}
+
+export const manejadorListo = crearManejadorListo()
 
 /**
  * `POST /api/register` — Saleor entrega aquí el token tras instalar la App.

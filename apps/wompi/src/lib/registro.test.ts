@@ -243,3 +243,54 @@ describe('POST /api/register — no escribe el token en el log', () => {
     await app.close()
   })
 })
+
+describe('healthcheck de cadena (/api/health/ready)', () => {
+  const saleorOk = () => new Response('{"data":{}}', { status: 200 })
+  const jwksOk = () => new Response('{"keys":[{"kid":"a"}]}', { status: 200 })
+
+  async function servidor(fetchFn: typeof fetch) {
+    const { crearManejadorListo } = await import('./registro.js')
+    const app = Fastify()
+    app.get('/api/health/ready', crearManejadorListo(fetchFn))
+    return app
+  }
+
+  function entornoCompleto() {
+    Object.assign(process.env, {
+      WOMPI_EVENTS_SECRET: 's', SALEOR_API_URL: 'https://saleor.example.com/graphql/',
+      WOMPI_PUBLIC_KEY: 'p', WOMPI_PRIVATE_KEY: 'k', WOMPI_INTEGRITY_KEY: 'i', SALEOR_APP_TOKEN: 't',
+    })
+  }
+
+  it('200 cuando toda la cadena responde', async () => {
+    entornoCompleto()
+    const fetchFn = (async (u: string) => (String(u).endsWith('jwks.json') ? jwksOk() : saleorOk())) as unknown as typeof fetch
+    const res = await (await servidor(fetchFn)).inject({ method: 'GET', url: '/api/health/ready' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().status).toBe('ok')
+  })
+
+  it('503 si falta una variable, sin filtrar su valor', async () => {
+    entornoCompleto()
+    delete process.env.WOMPI_PRIVATE_KEY
+    const fetchFn = (async (u: string) => (String(u).endsWith('jwks.json') ? jwksOk() : saleorOk())) as unknown as typeof fetch
+    const res = await (await servidor(fetchFn)).inject({ method: 'GET', url: '/api/health/ready' })
+    expect(res.statusCode).toBe(503)
+    expect(res.json().checks.config.detalle).toContain('WOMPI_PRIVATE_KEY')
+    expect(res.body).not.toContain(TOKEN_DE_PRUEBA)
+  })
+
+  it('503 si Saleor no es alcanzable aunque el proceso esté vivo', async () => {
+    entornoCompleto()
+    const fetchFn = (async () => { throw new Error('ECONNREFUSED') }) as unknown as typeof fetch
+    const res = await (await servidor(fetchFn)).inject({ method: 'GET', url: '/api/health/ready' })
+    expect(res.statusCode).toBe(503)
+    expect(res.json().checks.saleor.ok).toBe(false)
+    expect(res.json().checks.jwks.ok).toBe(false)
+  })
+
+  it('/api/health (liveness) sigue en 200 sin tocar la red', async () => {
+    delete process.env.SALEOR_APP_TOKEN
+    expect(await manejadorSalud()).toEqual({ status: 'degraded', registered: false })
+  })
+})

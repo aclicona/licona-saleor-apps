@@ -7,7 +7,7 @@ import { transactionRefundHandler } from './webhooks/transaction-refund.js'
 import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
 import { mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
-import { exigirAppRegistrada, manejadorRegistro, manejadorSalud } from './lib/registro.js'
+import { exigirAppRegistrada, manejadorListo, manejadorRegistro, manejadorSalud } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
 
 // Fail-fast ANTES de crear el servidor: sin las variables obligatorias el
@@ -173,6 +173,9 @@ app.post('/api/register', manejadorRegistro)
 // `registered` para que un verde no pueda significar "viva pero incapaz de
 // procesar un pago" sin que se note.
 app.get('/api/health', manejadorSalud)
+// Healthcheck de cadena (config + Saleor + JWKS). 503 si algo falla. Para
+// monitoreo/alertas, no como liveness probe: ver lib/registro.ts.
+app.get('/api/health/ready', manejadorListo)
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
 app.get('/', async (_, reply) => {

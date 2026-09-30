@@ -79,6 +79,13 @@ del objeto.
 no permite globs que conserven directorios, así que cada `Dockerfile` los lista a mano. Al añadir una
 App hay que añadirla en los de las demás; `pnpm check:dockerfiles` falla si falta alguna (conviene
 incluirlo en CI).
+**Healthchecks (B-407):** cada App expone dos, con propósito distinto. `GET /api/health` (solo wompi)
+es de *vida*: barato, sin red, 200 incluso en modo degradado — es el que puede usar el orquestador.
+`GET /api/health/ready` (wompi y envios) es de *cadena*: config presente, Saleor alcanzable (POST
+`{ __typename }`) y JWKS descargable con claves; **503** con el detalle por eslabón si falla uno.
+Hace red con timeout de 3 s, así que es para monitoreo/alertas externas, **no** como liveness probe
+(mataría la App antes de que Saleor le entregue el token). Lógica compartida:
+`verificarCadena` en `packages/webhook-utils/src/salud.ts` (fetch inyectable, probada con dobles).
 
 ---
 
