@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # La versión de pnpm sale del campo `packageManager` de package.json
+      # (pnpm/action-setup la lee sola); la de Node, de .nvmrc. Así CI, los
+      # Dockerfile y el desarrollo local usan las mismas versiones.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `@licona/webhook-utils` apunta a ./dist: hay que compilarlo antes de
+      # que las Apps puedan resolverlo (typecheck y tests incluidos).
+      - run: pnpm -r build
+
+      - run: pnpm typecheck
+
+      - run: pnpm test

@@ -67,6 +67,10 @@ pnpm --filter "@licona/*" build
 
 `build` compila con `tsconfig.build.json` (excluye `*.test.ts`, así `dist/` y la imagen de
 producción no llevan tests). `tsconfig.json` sí los incluye: `pnpm typecheck` los verifica.
+**CI:** `.github/workflows/ci.yml` corre en cada PR y push a `main`: `pnpm install --frozen-lockfile`,
+`pnpm -r build` (`webhook-utils` debe compilarse antes que las Apps), `pnpm typecheck` y `pnpm test`.
+Node sale de `.nvmrc` y pnpm de `packageManager`. No despliega. Para reproducirlo en local, ejecutar
+esos cuatro comandos en ese orden.
 
 ---
 
