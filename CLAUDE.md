@@ -79,6 +79,11 @@ del objeto.
 no permite globs que conserven directorios, así que cada `Dockerfile` los lista a mano. Al añadir una
 App hay que añadirla en los de las demás; `pnpm check:dockerfiles` falla si falta alguna (conviene
 incluirlo en CI).
+**Subscriptions del manifiesto (B-382):** las `query` de suscripción son texto crudo que nada compila.
+`pnpm check:subscriptions` (tras `pnpm -r build`) las valida con `graphql.validate` contra el esquema del
+fork, cuya ruta se pasa en `SALEOR_SCHEMA_PATH`; sin la variable se omite (exit 0), con `--requerido` falla.
+Los manifiestos viven en `apps/*/src/manifest.ts` (`construirManifiesto`). Falta publicar el esquema versionado
+del fork y fijar la variable en CI.
 **Healthchecks (B-407):** cada App expone dos, con propósito distinto. `GET /api/health` (solo wompi)
 es de *vida*: barato, sin red, 200 incluso en modo degradado — es el que puede usar el orquestador.
 `GET /api/health/ready` (wompi y envios) es de *cadena*: config presente, Saleor alcanzable (POST

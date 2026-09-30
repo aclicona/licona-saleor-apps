@@ -38,3 +38,8 @@ jobs:
       - run: pnpm typecheck
 
       - run: pnpm test
+
+      # B-382: valida las subscriptions del manifiesto contra el esquema del fork.
+      # Se omite mientras SALEOR_SCHEMA_PATH no exista (el esquema vive en el repo
+      # del fork); ver scripts/validar-subscriptions.mjs.
+      - run: pnpm check:subscriptions

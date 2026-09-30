@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from 'fastify'
+import { construirManifiesto } from './manifest.js'
 import { shippingListMethodsHandler } from './webhooks/shipping-list-methods.js'
 import { manejadorListo, manejadorRegistro } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
@@ -31,46 +32,7 @@ app.get('/', async (request, reply) => {
   <body><div class="box"><h1>Licona Envíos CO</h1><p>App de envíos activa — Servientrega · Coordinadora · TCC</p></div></body></html>`
 })
 
-app.get('/api/manifest', async () => ({
-  id: 'app.licona.envios',
-  version: '1.0.0',
-  name: 'Licona Envíos CO',
-  about: 'Integración con Servientrega, Coordinadora y TCC',
-  permissions: ['MANAGE_SHIPPING'],
-  appUrl: APP_URL,
-  tokenTargetUrl: `${APP_URL}/api/register`,
-  webhooks: [
-    {
-      name: 'Shipping methods for checkout',
-      syncEvents: ['SHIPPING_LIST_METHODS_FOR_CHECKOUT'],
-      isActive: true,
-      targetUrl: `${APP_URL}/api/webhooks/shipping-list-methods`,
-      query: `subscription {
-  event {
-    ... on ShippingListMethodsForCheckout {
-      checkout {
-        id
-        shippingAddress {
-          city
-          postalCode
-          countryArea
-        }
-        lines {
-          quantity
-          variant {
-            weight { value unit }
-            product { weight { value unit } }
-          }
-        }
-      }
-    }
-  }
-}`,
-    },
-  ],
-  extensions: [],
-  requiredSaleorVersion: '>=3.22.0',
-}))
+app.get('/api/manifest', async () => construirManifiesto(APP_URL))
 
 // Saleor hace POST del token aquí tras instalar la App. El handler vive en
 // lib/registro.ts y NO escribe el valor del token en el log.

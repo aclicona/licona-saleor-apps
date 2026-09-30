@@ -73,6 +73,9 @@ importers:
 
   packages/webhook-utils:
     dependencies:
+      graphql:
+        specifier: ^16.13.2
+        version: 16.13.2
       jose:
         specifier: ^5.0.0
         version: 5.10.0

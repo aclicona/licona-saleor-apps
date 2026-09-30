@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "graphql": "^16.13.2",
     "jose": "^5.0.0"
   },
   "devDependencies": {
