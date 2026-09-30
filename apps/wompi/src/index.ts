@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from 'fastify'
+import { avisarDerivaAlArranque } from '@licona/webhook-utils'
 import { paymentGatewayInitializeHandler } from './webhooks/payment-gateway-initialize.js'
 import { transactionInitializeHandler } from './webhooks/transaction-initialize.js'
 import { transactionProcessHandler } from './webhooks/transaction-process.js'
@@ -218,4 +219,15 @@ app.post('/api/webhooks/wompi-incoming', soloRegistrada, wompiIncomingHandler)
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) { app.log.error(err); process.exit(1) }
+
+  // B-406: Saleor congela las suscripciones al instalar; si el manifiesto vivo ya
+  // no coincide con lo instalado, se grita en el log (no repara, no bloquea).
+  void app.inject('/api/manifest').then((res) =>
+    avisarDerivaAlArranque({
+      webhooksManifiesto: res.json().webhooks,
+      saleorApiUrl: process.env.SALEOR_API_URL ?? '',
+      appToken: process.env.SALEOR_APP_TOKEN ?? '',
+      log: app.log,
+    }),
+  )
 })
