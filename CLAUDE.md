@@ -84,6 +84,11 @@ incluirlo en CI).
 fork, cuya ruta se pasa en `SALEOR_SCHEMA_PATH`; sin la variable se omite (exit 0), con `--requerido` falla.
 Los manifiestos viven en `apps/*/src/manifest.ts` (`construirManifiesto`). Falta publicar el esquema versionado
 del fork y fijar la variable en CI.
+**Deriva del manifiesto (B-406):** Saleor congela la `query` de suscripción al instalar la App. Al arrancar
+(con `SALEOR_APP_TOKEN` presente), cada App compara su `/api/manifest` vivo con los webhooks que Saleor tiene
+registrados (`app { webhooks { … } }`) y escribe un log `error` con la deriva si difieren
+(`avisarDerivaAlArranque`, `packages/webhook-utils/src/deriva.ts`). Solo detecta: no repara ni bloquea el
+arranque. La consulta a Saleor está probada con dobles, no contra el fork.
 **Healthchecks (B-407):** cada App expone dos, con propósito distinto. `GET /api/health` (solo wompi)
 es de *vida*: barato, sin red, 200 incluso en modo degradado — es el que puede usar el orquestador.
 `GET /api/health/ready` (wompi y envios) es de *cadena*: config presente, Saleor alcanzable (POST

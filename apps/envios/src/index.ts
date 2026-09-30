@@ -1,5 +1,6 @@
 import Fastify, { type FastifyRequest } from 'fastify'
 import { construirManifiesto } from './manifest.js'
+import { avisarDerivaAlArranque } from '@licona/webhook-utils'
 import { shippingListMethodsHandler } from './webhooks/shipping-list-methods.js'
 import { manejadorListo, manejadorRegistro } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
@@ -46,4 +47,15 @@ app.post('/api/webhooks/shipping-list-methods', shippingListMethodsHandler)
 const PORT = parseInt(process.env.PORT ?? '3002', 10)
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) { app.log.error(err); process.exit(1) }
+
+  // B-406: Saleor congela las suscripciones al instalar; si el manifiesto vivo ya
+  // no coincide con lo instalado, se grita en el log (no repara, no bloquea).
+  void app.inject('/api/manifest').then((res) =>
+    avisarDerivaAlArranque({
+      webhooksManifiesto: res.json().webhooks,
+      saleorApiUrl: process.env.SALEOR_API_URL ?? '',
+      appToken: process.env.SALEOR_APP_TOKEN ?? '',
+      log: app.log,
+    }),
+  )
 })

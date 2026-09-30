@@ -320,3 +320,5 @@ export * from './salud.js'
 
 export { validarSubscriptions } from './subscriptions.js'
 export type { ErrorDeSubscription, WebhookDeManifiesto } from './subscriptions.js'
+export { avisarDerivaAlArranque, consultarWebhooksRegistrados, detectarDeriva } from './deriva.js'
+export type { Deriva, WebhookEsperado, WebhookRegistrado } from './deriva.js'
