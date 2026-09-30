@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { verificarCadena } from '@licona/webhook-utils'
 
 /**
  * `POST /api/register` — Saleor entrega aquí el token tras instalar la App.
@@ -39,3 +40,23 @@ export async function manejadorRegistro(req: FastifyRequest, reply: FastifyReply
 
   return reply.status(200).send({ success: true })
 }
+
+/**
+ * Healthcheck de cadena (`GET /api/health/ready`): config presente, Saleor
+ * alcanzable y JWKS descargable. **503** si falla cualquier eslabón, con el
+ * detalle de cuál. Hace red (con timeout): para monitoreo/alertas, no como
+ * liveness probe del orquestador. `fetchFn` se inyecta para probarlo con dobles.
+ */
+export function crearManejadorListo(fetchFn?: typeof fetch) {
+  return async function manejadorListo(_req: FastifyRequest, reply: FastifyReply) {
+    const faltantes = ['SALEOR_API_URL', 'SALEOR_APP_TOKEN'].filter((n) => !process.env[n]?.trim())
+    const resultado = await verificarCadena({
+      saleorApiUrl: process.env.SALEOR_API_URL ?? '',
+      variablesFaltantes: faltantes,
+      fetchFn,
+    })
+    return reply.status(resultado.ok ? 200 : 503).send({ status: resultado.ok ? 'ok' : 'unavailable', ...resultado })
+  }
+}
+
+export const manejadorListo = crearManejadorListo()

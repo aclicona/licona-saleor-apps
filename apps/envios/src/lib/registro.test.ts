@@ -111,3 +111,38 @@ describe('POST /api/register — no escribe el token en el log', () => {
     expect(estado.status).toBe(400)
   })
 })
+
+describe('healthcheck de cadena (/api/health/ready)', () => {
+  const ok = (u: string) =>
+    new Response(String(u).endsWith('jwks.json') ? '{"keys":[{"kid":"a"}]}' : '{"data":{}}', { status: 200 })
+
+  async function pedir(fetchFn: typeof fetch) {
+    const { crearManejadorListo } = await import('./registro.js')
+    const app = Fastify()
+    app.get('/api/health/ready', crearManejadorListo(fetchFn))
+    return app.inject({ method: 'GET', url: '/api/health/ready' })
+  }
+
+  it('200 cuando toda la cadena responde', async () => {
+    vi.stubEnv('SALEOR_API_URL', 'https://saleor.example.com/graphql/')
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    const res = await pedir((async (u: string) => ok(u)) as unknown as typeof fetch)
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('503 si falta SALEOR_APP_TOKEN', async () => {
+    vi.stubEnv('SALEOR_API_URL', 'https://saleor.example.com/graphql/')
+    vi.stubEnv('SALEOR_APP_TOKEN', '')
+    const res = await pedir((async (u: string) => ok(u)) as unknown as typeof fetch)
+    expect(res.statusCode).toBe(503)
+    expect(res.json().checks.config.detalle).toContain('SALEOR_APP_TOKEN')
+  })
+
+  it('503 si Saleor no es alcanzable', async () => {
+    vi.stubEnv('SALEOR_API_URL', 'https://saleor.example.com/graphql/')
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    const res = await pedir((async () => { throw new Error('ECONNREFUSED') }) as unknown as typeof fetch)
+    expect(res.statusCode).toBe(503)
+    expect(res.json().checks.saleor.ok).toBe(false)
+  })
+})

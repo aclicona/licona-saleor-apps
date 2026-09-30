@@ -316,3 +316,4 @@ const MENSAJE_POR_MOTIVO: Record<SaleorWebhookErrorReason, string> = {
     'This is a connectivity or Saleor availability problem, NOT a forged signature.',
   invalid_signature: 'Webhook signature verification failed',
 }
+export * from './salud.js'

@@ -1,6 +1,6 @@
 import Fastify, { type FastifyRequest } from 'fastify'
 import { shippingListMethodsHandler } from './webhooks/shipping-list-methods.js'
-import { manejadorRegistro } from './lib/registro.js'
+import { manejadorListo, manejadorRegistro } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
 
 // El logger ya no se activa a pelo con `true`: `opcionesServidor()` le pone
@@ -75,6 +75,9 @@ app.get('/api/manifest', async () => ({
 // Saleor hace POST del token aquí tras instalar la App. El handler vive en
 // lib/registro.ts y NO escribe el valor del token en el log.
 app.post('/api/register', manejadorRegistro)
+
+// Healthcheck de cadena (config + Saleor + JWKS). 503 si algo falla.
+app.get('/api/health/ready', manejadorListo)
 
 app.post('/api/webhooks/shipping-list-methods', shippingListMethodsHandler)
 
