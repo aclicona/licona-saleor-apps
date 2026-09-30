@@ -362,6 +362,27 @@ describe('wompiIncomingHandler — camino feliz', () => {
   })
 })
 
+describe('wompiIncomingHandler — secuencia APPROVED → VOIDED (B-411)', () => {
+  it('reporta el void como CHARGE_FAILURE con el MISMO pspReference que el cobro aprobado', async () => {
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    for (const status of ['APPROVED', 'VOIDED']) {
+      const { req } = crearRequest({ evento: eventoWompi({ status }) })
+      const { reply, captura } = crearReply()
+      await wompiIncomingHandler(req, reply)
+      expect(captura.status).toBe(200)
+    }
+
+    expect(reportTransactionEventMock).toHaveBeenCalledTimes(2)
+    const [aprobado, anulado] = reportTransactionEventMock.mock.calls.map(([arg]) => arg)
+    expect(aprobado).toMatchObject({ type: 'CHARGE_SUCCESS', pspReference: 'wompi-txn-12345' })
+    // CHARGE_FAILURE (no CANCEL_*) y mismo pspReference: así Saleor revierte el
+    // cobro aprobado. Cambiar cualquiera de los dos deja la orden pagada tras un void.
+    expect(anulado).toMatchObject({ type: 'CHARGE_FAILURE', pspReference: aprobado.pspReference })
+    expect(anulado.transactionId).toBe(aprobado.transactionId)
+  })
+})
+
 describe('wompiIncomingHandler — fallos transitorios (500, Wompi debe reintentar)', () => {
   it('responde 500 cuando la llamada a Saleor da timeout', async () => {
     reportTransactionEventMock.mockRejectedValue(

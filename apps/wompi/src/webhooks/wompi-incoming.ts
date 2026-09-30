@@ -10,6 +10,25 @@ import { CABECERA_CHECKSUM, verificarFirmaWompi, type EventoFirmado } from '../l
 import { camposDeCorrelacionWompi } from '../lib/correlacion.js'
 import { transactionIdDesdeReferencia } from '../lib/referencia.js'
 
+/**
+ * Estados de la transacción en Wompi → tipo de evento de `transactionEventReport`.
+ *
+ * `VOIDED → CHARGE_FAILURE` parece un error (¿no debería ser CANCEL?) pero es
+ * deliberado y NO debe "corregirse" a `CANCEL_SUCCESS`. Un void llega DESPUÉS de
+ * un `APPROVED` de la misma transacción de Wompi, o sea con el mismo
+ * `pspReference` (`txn.id`). Saleor asocia ambos eventos a la misma transacción
+ * y el último `CHARGE_FAILURE` revierte el `CHARGE_SUCCESS` previo: la orden
+ * deja de figurar como pagada. Con `CANCEL_SUCCESS` el cargo aprobado seguiría
+ * contando y la orden quedaría pagada tras un void — una regresión de dinero.
+ *
+ * La dependencia no obvia es el `pspReference` compartido: si el id de la
+ * transacción en Wompi dejara de coincidir entre ambos eventos, el void se
+ * registraría como un fallo aparte y no revertiría nada. La secuencia está
+ * fijada por un test en `wompi-incoming.test.ts`.
+ *
+ * Estados de Wompi (PENDING, APPROVED, DECLINED, VOIDED, ERROR): ver
+ * `docs/wompi-estados.md`.
+ */
 const WOMPI_TO_SALEOR: Record<string, 'CHARGE_SUCCESS' | 'CHARGE_FAILURE'> = {
   APPROVED: 'CHARGE_SUCCESS',
   DECLINED: 'CHARGE_FAILURE',
