@@ -8,6 +8,9 @@ interface TransactionProcessPayload {
   action: { amount: number }
 }
 
+// Mismo criterio que en `wompi-incoming.ts`: `VOIDED → CHARGE_FAILURE` es
+// deliberado (revierte el cobro aprobado previo por compartir `pspReference`);
+// no cambiarlo a CANCEL. Estados de Wompi en `docs/wompi-estados.md`.
 const WOMPI_STATUS_MAP: Record<string, string> = {
   APPROVED: 'CHARGE_SUCCESS',
   DECLINED: 'CHARGE_FAILURE',
