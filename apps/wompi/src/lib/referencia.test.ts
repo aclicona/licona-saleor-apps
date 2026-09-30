@@ -115,3 +115,46 @@ describe('transactionIdDesdeReferencia — referencias que no son un id de Saleo
     expect(transactionIdDesdeReferencia(referencia)).toBeUndefined()
   })
 })
+
+describe('referenciaParaWompi — codificación base64url tras flag (B-397)', () => {
+  // Wompi documenta referencias alfanuméricas y `=` no lo es. La codificación
+  // está detrás de WOMPI_REFERENCIA_CODIFICADA hasta validarla en sandbox.
+  const activo = { WOMPI_REFERENCIA_CODIFICADA: 'true' } as NodeJS.ProcessEnv
+
+  it('sin flag sigue siendo la identidad (comportamiento actual intacto)', () => {
+    const id = idGlobalDeTransaccion()
+
+    expect(referenciaParaWompi(id, {} as NodeJS.ProcessEnv)).toBe(id)
+    expect(referenciaParaWompi(id, { WOMPI_REFERENCIA_CODIFICADA: 'false' } as NodeJS.ProcessEnv)).toBe(id)
+  })
+
+  it('con flag emite base64url sin relleno: solo [A-Za-z0-9_-], sin "="', () => {
+    for (let i = 0; i < 25; i++) {
+      const referencia = referenciaParaWompi(idGlobalDeTransaccion(), activo)
+
+      expect(referencia).toMatch(/^[A-Za-z0-9_-]+$/)
+      expect(referencia.length).toBeLessThanOrEqual(96)
+    }
+  })
+
+  it('con flag, la inversa recupera el id global exacto', () => {
+    for (let i = 0; i < 25; i++) {
+      const id = idGlobalDeTransaccion()
+
+      expect(transactionIdDesdeReferencia(referenciaParaWompi(id, activo))).toBe(id)
+    }
+  })
+
+  it('la inversa acepta ambos formatos a la vez: activar o desactivar el flag no pierde pagos en vuelo', () => {
+    const id = idGlobalDeTransaccion()
+
+    expect(transactionIdDesdeReferencia(referenciaParaWompi(id, {} as NodeJS.ProcessEnv))).toBe(id)
+    expect(transactionIdDesdeReferencia(referenciaParaWompi(id, activo))).toBe(id)
+  })
+
+  it('con flag, una referencia codificada cuyo interior no es un id de Saleor devuelve undefined', () => {
+    const basura = Buffer.from(enBase64('Checkout:1'), 'utf8').toString('base64url')
+
+    expect(transactionIdDesdeReferencia(basura)).toBeUndefined()
+  })
+})

@@ -104,6 +104,11 @@ Cada app de pasarela implementa **6 webhooks síncronos** de Saleor:
 
 Más un webhook **entrante** de la pasarela (ej. `POST /wompi-incoming`) que llama `transactionEventReport` en Saleor.
 
+**Referencia a Wompi (B-397):** `referenciaParaWompi` (`apps/wompi/src/lib/referencia.ts`) es la identidad
+por defecto (ID global de 72 caracteres terminado en `==`, nunca validado contra Wompi, que documenta
+referencias alfanuméricas). Con `WOMPI_REFERENCIA_CODIFICADA=true` emite base64url sin relleno; la inversa
+acepta ambos formatos. Activar solo tras probar en sandbox de Wompi.
+
 **Conversión de montos:** Saleor envía COP (ej. `120000`), Wompi espera centavos (`12000000`).
 **No multiplicar a mano** — usar `copToCents` / `centsToCop` (`apps/wompi/src/lib/money.ts`, cubiertas
 por tests desde 2026-08-22). Redondean explícitamente: en IEEE-754 `19.99 * 100` da
