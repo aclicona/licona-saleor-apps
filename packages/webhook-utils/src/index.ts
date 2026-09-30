@@ -317,3 +317,6 @@ const MENSAJE_POR_MOTIVO: Record<SaleorWebhookErrorReason, string> = {
   invalid_signature: 'Webhook signature verification failed',
 }
 export * from './salud.js'
+
+export { validarSubscriptions } from './subscriptions.js'
+export type { ErrorDeSubscription, WebhookDeManifiesto } from './subscriptions.js'
