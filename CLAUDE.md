@@ -71,6 +71,10 @@ producción no llevan tests). `tsconfig.json` sí los incluye: `pnpm typecheck` 
 `pnpm -r build` (`webhook-utils` debe compilarse antes que las Apps), `pnpm typecheck` y `pnpm test`.
 Node sale de `.nvmrc` y pnpm de `packageManager`. No despliega. Para reproducirlo en local, ejecutar
 esos cuatro comandos en ese orden.
+**Logging en `apps/envios`:** el handler de envíos usa el mismo patrón que los de wompi: `req.log.child`
+con `webhook` y las claves canónicas de correlación (`checkoutId`, en `lib/correlacion.ts`), y los
+fallos de firma se escriben como `log.warn({ motivo: err.reason }, err.message)` — no con `msg` dentro
+del objeto.
 
 ---
 
