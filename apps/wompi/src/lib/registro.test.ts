@@ -73,11 +73,11 @@ describe('healthcheck — dice si la App está registrada, no solo si responde',
     // sobre una App incapaz de procesar un solo pago.
     delete process.env.SALEOR_APP_TOKEN
 
-    expect(await manejadorSalud()).toEqual({ status: 'degraded', registered: false })
+    expect(await manejadorSalud()).toEqual({ status: 'degraded', registered: false, deriva: { estado: 'sin_comprobar' } })
   })
 
   it('reporta registered: true y status ok con el token puesto', async () => {
-    expect(await manejadorSalud()).toEqual({ status: 'ok', registered: true })
+    expect(await manejadorSalud()).toEqual({ status: 'ok', registered: true, deriva: { estado: 'sin_comprobar' } })
   })
 
   it('responde 200 incluso degradado: un 503 aquí reabriría el candado', async () => {
@@ -89,7 +89,7 @@ describe('healthcheck — dice si la App está registrada, no solo si responde',
     const respuesta = await app.inject({ method: 'GET', url: '/api/health' })
 
     expect(respuesta.statusCode).toBe(200)
-    expect(respuesta.json()).toEqual({ status: 'degraded', registered: false })
+    expect(respuesta.json()).toEqual({ status: 'degraded', registered: false, deriva: { estado: 'sin_comprobar' } })
     await app.close()
   })
 
@@ -291,6 +291,62 @@ describe('healthcheck de cadena (/api/health/ready)', () => {
 
   it('/api/health (liveness) sigue en 200 sin tocar la red', async () => {
     delete process.env.SALEOR_APP_TOKEN
-    expect(await manejadorSalud()).toEqual({ status: 'degraded', registered: false })
+    expect(await manejadorSalud()).toEqual({ status: 'degraded', registered: false, deriva: { estado: 'sin_comprobar' } })
+  })
+})
+
+describe('deriva del manifiesto en el healthcheck (B-406)', () => {
+  const derivaUna = [{ webhook: 'w', tipo: 'QUERY_DISTINTA' as const, detalle: 'd' }]
+
+  async function salud(estado: import('@licona/webhook-utils').EstadoDeriva) {
+    const { crearManejadorSalud } = await import('./registro.js')
+    const { crearSeguimientoDeriva } = await import('@licona/webhook-utils')
+    const seguimiento = crearSeguimientoDeriva()
+    seguimiento.registrar(estado)
+    const app = Fastify()
+    app.get('/api/health', crearManejadorSalud(seguimiento))
+    return app.inject({ method: 'GET', url: '/api/health' })
+  }
+
+  it('sin deriva → ok', async () => {
+    const res = await salud({ estado: 'sano' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ status: 'ok', registered: true, deriva: { estado: 'sano' } })
+  })
+
+  it('con deriva → degraded con motivo legible, y sigue 200 (no tumba la App)', async () => {
+    const res = await salud({ estado: 'deriva', deriva: derivaUna })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().status).toBe('degraded')
+    expect(res.json().deriva.detalle).toContain('w (QUERY_DISTINTA)')
+  })
+
+  it('error de consulta → desconocido, NO degraded', async () => {
+    const res = await salud({ estado: 'desconocido', motivo: 'ECONNREFUSED' })
+    expect(res.json().status).toBe('ok')
+    expect(res.json().deriva).toMatchObject({ estado: 'desconocido' })
+  })
+
+  it('/api/health/ready: con deriva → 503 con detalle; desconocido → 200', async () => {
+    const { crearManejadorListo } = await import('./registro.js')
+    const { crearSeguimientoDeriva } = await import('@licona/webhook-utils')
+    Object.assign(process.env, {
+      WOMPI_EVENTS_SECRET: 's', SALEOR_API_URL: 'https://saleor.example.com/graphql/',
+      WOMPI_PUBLIC_KEY: 'p', WOMPI_PRIVATE_KEY: 'k', WOMPI_INTEGRITY_KEY: 'i', SALEOR_APP_TOKEN: 't',
+    })
+    const fetchFn = (async (u: string) =>
+      new Response(String(u).endsWith('jwks.json') ? '{"keys":[{"kid":"a"}]}' : '{"data":{}}')) as unknown as typeof fetch
+    const pedir = async (estado: import('@licona/webhook-utils').EstadoDeriva) => {
+      const seg = crearSeguimientoDeriva()
+      seg.registrar(estado)
+      const app = Fastify()
+      app.get('/r', crearManejadorListo(fetchFn, seg))
+      return app.inject({ method: 'GET', url: '/r' })
+    }
+    const rojo = await pedir({ estado: 'deriva', deriva: derivaUna })
+    expect(rojo.statusCode).toBe(503)
+    expect(rojo.json().checks.deriva.detalle).toContain('reinstalar')
+    expect((await pedir({ estado: 'desconocido', motivo: 'x' })).statusCode).toBe(200)
+    expect((await pedir({ estado: 'sano' })).statusCode).toBe(200)
   })
 })

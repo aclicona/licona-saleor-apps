@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { verificarCadena } from '@licona/webhook-utils'
+import { crearSeguimientoDeriva, resumirDeriva, verificarCadena, type SeguimientoDeriva } from '@licona/webhook-utils'
 import { appRegistrada, variablesDeOperacionFaltantes, variablesObligatoriasFaltantes } from './config.js'
 
 /**
@@ -10,6 +10,13 @@ import { appRegistrada, variablesDeOperacionFaltantes, variablesObligatoriasFalt
  * instalación exige que la App ya esté viva. Aquí vive la consecuencia práctica
  * de esa decisión: qué se sirve sin token y qué se rechaza.
  */
+
+/**
+ * Estado de deriva del manifiesto (B-406), escrito por la comprobación del
+ * arranque y leído por los healthchecks. Compartido por módulo: hay un proceso
+ * por App.
+ */
+export const seguimientoDeriva = crearSeguimientoDeriva()
 
 /**
  * Mensaje del 503. Es explícito a propósito — nombra la variable exacta que
@@ -55,16 +62,34 @@ export async function exigirAppRegistrada(req: FastifyRequest, reply: FastifyRep
  * Ese es justo el estado en el que queda una instancia recién aprovisionada, y
  * es un estado que hay que poder ver desde fuera.
  *
- * Devuelve **200 también en modo degradado**, a propósito: si el orquestador
+ * Devuelve **200 también en modo degradado** (sin registrar o con deriva de manifiesto, B-406), a propósito: si el orquestador
  * matara el contenedor por estar sin registrar, la App nunca llegaría viva al
  * momento en que Saleor le hace POST del token — y se reabriría el candado que
  * todo esto viene a romper. Quien quiera alertar sobre "degradada" mira el
  * campo `registered`, no el código HTTP.
  */
-export async function manejadorSalud() {
-  const registered = appRegistrada()
-  return { status: registered ? 'ok' : 'degraded', registered }
+export function crearManejadorSalud(seguimiento: SeguimientoDeriva = seguimientoDeriva) {
+  return async function manejadorSalud() {
+    const registered = appRegistrada()
+    const d = seguimiento.obtener()
+    // Deriva (B-406): la App sigue VIVA, así que el código HTTP no cambia (un 503
+    // aquí haría que el orquestador la matara, y reiniciar no arregla la deriva:
+    // hay que reinstalar). Se refleja en status y se explica en `deriva`.
+    // `desconocido` (la consulta a Saleor falló) NO degrada: no sabemos que haya deriva.
+    const conDeriva = d.estado === 'deriva'
+    return {
+      status: registered && !conDeriva ? 'ok' : 'degraded',
+      registered,
+      deriva: {
+        estado: d.estado,
+        ...(conDeriva ? { detalle: resumirDeriva(d.deriva ?? []) } : {}),
+        ...(d.estado === 'desconocido' ? { detalle: `no se pudo consultar a Saleor: ${d.motivo ?? 'sin detalle'}` } : {}),
+      },
+    }
+  }
 }
+
+export const manejadorSalud = crearManejadorSalud()
 
 /**
  * Healthcheck de CADENA (`GET /api/health/ready`): config completa, Saleor
@@ -79,12 +104,13 @@ export async function manejadorSalud() {
  *
  * `fetchFn` se inyecta para probarlo con dobles, sin Saleor real.
  */
-export function crearManejadorListo(fetchFn?: typeof fetch) {
+export function crearManejadorListo(fetchFn?: typeof fetch, seguimiento: SeguimientoDeriva = seguimientoDeriva) {
   return async function manejadorListo(_req: FastifyRequest, reply: FastifyReply) {
     const resultado = await verificarCadena({
       saleorApiUrl: process.env.SALEOR_API_URL ?? '',
       variablesFaltantes: [...variablesObligatoriasFaltantes(process.env), ...variablesDeOperacionFaltantes()],
       fetchFn,
+      deriva: seguimiento.obtener(),
     })
     return reply.status(resultado.ok ? 200 : 503).send({ status: resultado.ok ? 'ok' : 'unavailable', ...resultado })
   }

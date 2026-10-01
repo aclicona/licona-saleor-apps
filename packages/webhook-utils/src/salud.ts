@@ -10,6 +10,8 @@
  * dobles, sin Saleor real. Nunca devuelve valores de variables, solo sus nombres.
  */
 
+import { resumirDeriva } from './deriva.js'
+
 export interface EstadoEslabon {
   ok: boolean
   detalle?: string
@@ -21,6 +23,8 @@ export interface ResultadoCadena {
     config: EstadoEslabon
     saleor: EstadoEslabon
     jwks: EstadoEslabon
+    /** Solo si la App informa su deriva (B-406). Ausente = no se evalúa. */
+    deriva?: EstadoEslabon
   }
 }
 
@@ -31,6 +35,12 @@ export interface OpcionesCadena {
   variablesFaltantes: string[]
   fetchFn?: typeof fetch
   timeoutMs?: number
+  /**
+   * Estado de deriva del manifiesto (B-406). Solo `deriva` pone el eslabón en
+   * rojo; `desconocido` (la consulta a Saleor falló) y `sin_comprobar` no: ahí
+   * no sabemos que algo esté mal, y `saleor` ya cubre la caída real.
+   */
+  deriva?: import('./deriva.js').EstadoDeriva
 }
 
 const TIMEOUT_POR_DEFECTO_MS = 3000
@@ -47,8 +57,21 @@ async function comprobar(fn: () => Promise<EstadoEslabon>): Promise<EstadoEslabo
   }
 }
 
+function estadoDerivaAEslabon(d: import('./deriva.js').EstadoDeriva): EstadoEslabon {
+  switch (d.estado) {
+    case 'deriva':
+      return { ok: false, detalle: resumirDeriva(d.deriva ?? []) }
+    case 'desconocido':
+      return { ok: true, detalle: `desconocido: no se pudo consultar a Saleor (${d.motivo ?? 'sin detalle'})` }
+    case 'sin_comprobar':
+      return { ok: true, detalle: 'sin comprobar' }
+    default:
+      return { ok: true }
+  }
+}
+
 export async function verificarCadena(opciones: OpcionesCadena): Promise<ResultadoCadena> {
-  const { saleorApiUrl, variablesFaltantes, fetchFn = fetch, timeoutMs = TIMEOUT_POR_DEFECTO_MS } = opciones
+  const { saleorApiUrl, variablesFaltantes, fetchFn = fetch, timeoutMs = TIMEOUT_POR_DEFECTO_MS, deriva } = opciones
 
   const config: EstadoEslabon =
     variablesFaltantes.length === 0
@@ -90,5 +113,7 @@ export async function verificarCadena(opciones: OpcionesCadena): Promise<Resulta
     ])
   }
 
-  return { ok: config.ok && saleor.ok && jwks.ok, checks: { config, saleor, jwks } }
+  const eslabonDeriva: EstadoEslabon | undefined = deriva && estadoDerivaAEslabon(deriva)
+  const checks = eslabonDeriva ? { config, saleor, jwks, deriva: eslabonDeriva } : { config, saleor, jwks }
+  return { ok: config.ok && saleor.ok && jwks.ok && (eslabonDeriva?.ok ?? true), checks }
 }
