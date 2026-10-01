@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { WompiClient } from './wompi-client.js'
 
 function crearClientePrueba() {
@@ -69,5 +69,27 @@ describe('WompiClient.integritySignature — firma de integridad del cobro', () 
     const firma = client.integritySignature('ref-abc', 500000, 'COP')
 
     expect(firma).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe('WompiClient.listTransactions — consulta para la conciliación (B-412)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('pagina, autentica con la llave privada y filtra por created_at', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(({ data: [{ id: 'a', created_at: '2026-10-02T10:00:00Z' }], meta: { total_pages: 2 } })) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(({ data: [{ id: 'b', created_at: '2026-09-01T10:00:00Z' }], meta: { total_pages: 2 } })) })
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await crearClientePrueba().listTransactions(new Date('2026-10-01T00:00:00Z'), new Date('2026-10-02T12:00:00Z'))
+    expect(r.map((t) => t.id)).toEqual(['a'])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toContain('/transactions?from_date=2026-10-01&until_date=2026-10-02&page=1')
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer prv_test_key')
+  })
+
+  it('lanza si el API responde error (la conciliación lo registra)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
+    await expect(crearClientePrueba().listTransactions(new Date(), new Date())).rejects.toThrow('Wompi listado 503')
   })
 })

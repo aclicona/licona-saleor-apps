@@ -7,6 +7,9 @@ import { transactionProcessHandler } from './webhooks/transaction-process.js'
 import { transactionChargeHandler } from './webhooks/transaction-charge.js'
 import { transactionRefundHandler } from './webhooks/transaction-refund.js'
 import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
+import { conciliacionHabilitada, crearHandlerConciliacion } from './lib/conciliacion.js'
+import { wompiClient } from './lib/wompi-client.js'
+import { reportTransactionEvent } from './lib/saleor-client.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
 import { mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
 import { exigirAppRegistrada, manejadorListo, manejadorRegistro, manejadorSalud } from './lib/registro.js'
@@ -106,6 +109,22 @@ app.post('/api/webhooks/transaction-cancelation-requested', soloRegistrada, tran
 
 // ─── Wompi incoming webhook ───────────────────────────────────────────────────
 app.post('/api/webhooks/wompi-incoming', soloRegistrada, wompiIncomingHandler)
+
+// ─── Conciliación contra el API de Wompi (B-412) — APAGADA por defecto ───────
+// La ruta NO existe (404) salvo WOMPI_CONCILIACION_HABILITADA=true + WOMPI_CONCILIACION_TOKEN.
+// No hay cron cableado: quien la encienda decide quién y cada cuánto la dispara.
+if (conciliacionHabilitada()) {
+  const cliente = wompiClient()
+  app.post(
+    '/api/conciliacion/ejecutar',
+    soloRegistrada,
+    crearHandlerConciliacion({
+      wompi: { listarTransacciones: (v) => cliente.listTransactions(v.desde, v.hasta) },
+      saleor: { reportar: reportTransactionEvent },
+    }),
+  )
+  app.log.warn('Conciliación Wompi HABILITADA: POST /api/conciliacion/ejecutar disponible con token')
+}
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
