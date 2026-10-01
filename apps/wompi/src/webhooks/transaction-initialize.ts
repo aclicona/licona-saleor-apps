@@ -4,6 +4,7 @@ import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { referenciaParaWompi } from '../lib/referencia.js'
+import { validarDatosTarjeta } from '../lib/tarjeta.js'
 
 interface TransactionInitializePayload {
   transaction: { id: string; pspReference: string }
@@ -26,6 +27,10 @@ interface TransactionInitializePayload {
     user_legal_id_type?: string
     user_legal_id?: string
     financial_institution_code?: string
+    // CARD (B-707): token producido por el navegador con la llave pública. `unknown`
+    // a propósito: se valida en `lib/tarjeta.ts` antes de tocar nada.
+    token?: unknown
+    installments?: unknown
   }
   sourceObject?: { email?: string; billingAddress?: { email?: string } }
 }
@@ -65,6 +70,14 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     })
   }
 
+  // CARD: se valida ANTES de hablar con Wompi (ni siquiera el acceptance token).
+  // Sin log del token: es credencial de un solo uso del comprador.
+  const tarjeta = method === 'CARD' ? validarDatosTarjeta(data) : undefined
+  if (tarjeta && !tarjeta.ok) {
+    log.warn({ metodo: method }, 'paymentData de CARD inválido: se rechaza sin llamar a Wompi')
+    return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: tarjeta.message })
+  }
+
   try {
     // Saleor sends COP (e.g. 120000). Wompi expects centavos (12000000).
     const amountInCents = copToCents(action.amount)
@@ -94,6 +107,10 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
         paymentMethod = phoneNumber
           ? { type: 'NEQUI', phone_number: phoneNumber }
           : { type: 'NEQUI' }
+        break
+      case 'CARD':
+        // `tarjeta` es ok aquí: el caso inválido ya respondió arriba.
+        paymentMethod = { type: 'CARD', ...(tarjeta as { ok: true; tarjeta: { token: string; installments: number } }).tarjeta }
         break
       default:
         paymentMethod = { type: method }

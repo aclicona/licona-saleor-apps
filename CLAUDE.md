@@ -128,6 +128,10 @@ acepta ambos formatos. Activar solo tras probar en sandbox de Wompi.
 defecto** (`WOMPI_CONCILIACION_HABILITADA`); sin cron cableado. Cómo encenderlo y decisiones pendientes:
 `apps/wompi/docs/conciliacion.md`.
 
+**Tarjeta (B-707):** `paymentData = { method:'CARD', token:'tok_…', installments }`; el token lo produce el navegador con la
+llave pública (`paymentGatewayInitialize`). Validación estricta en `apps/wompi/src/lib/tarjeta.ts`; contrato en
+`apps/wompi/docs/tarjeta-card.md`.
+
 **Conversión de montos:** Saleor envía COP (ej. `120000`), Wompi espera centavos (`12000000`).
 **No multiplicar a mano** — usar `copToCents` / `centsToCop` (`apps/wompi/src/lib/money.ts`, cubiertas
 por tests desde 2026-08-22). Redondean explícitamente: en IEEE-754 `19.99 * 100` da
