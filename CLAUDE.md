@@ -82,8 +82,8 @@ incluirlo en CI).
 **Subscriptions del manifiesto (B-382):** las `query` de suscripción son texto crudo que nada compila.
 `pnpm check:subscriptions` (tras `pnpm -r build`) las valida con `graphql.validate` contra el esquema del
 fork, cuya ruta se pasa en `SALEOR_SCHEMA_PATH`; sin la variable se omite (exit 0), con `--requerido` falla.
-Los manifiestos viven en `apps/*/src/manifest.ts` (`construirManifiesto`). Falta publicar el esquema versionado
-del fork y fijar la variable en CI.
+Los manifiestos viven en `apps/*/src/manifest.ts` (`construirManifiesto`). Este repo NO versiona ningún esquema GraphQL de Saleor, así que el paso de CI sigue omitiéndose hasta
+publicar el del fork y fijar la variable. `eslint.config.mjs` declara los globals de Node para los `.mjs`.
 **Deriva del manifiesto (B-406):** Saleor congela la `query` de suscripción al instalar la App. Al arrancar
 (con `SALEOR_APP_TOKEN` presente), cada App compara su `/api/manifest` vivo con los webhooks que Saleor tiene
 registrados (`app { webhooks { … } }`) y escribe un log `error` con la deriva si difieren
