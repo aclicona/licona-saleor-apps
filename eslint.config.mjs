@@ -113,6 +113,29 @@ export default tseslint.config(
   },
 
   {
+    // Scripts de Node (`scripts/*.mjs`, `*.mjs` sueltos): JS plano sin
+    // typecheck, así que `no-undef` sí aplica; hay que declarar los globals de
+    // Node a mano. Sin esto cada `process`/`console`/`URL` salía como error.
+    // Lista explícita en vez de la dependencia `globals`: no se añade un
+    // paquete (ni cambio de lockfile) por cinco nombres.
+    name: 'licona/scripts-node',
+    files: ['**/*.mjs', '**/*.cjs'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        Buffer: 'readonly',
+        fetch: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        AbortController: 'readonly',
+      },
+    },
+  },
+
+  {
     // Los tests usan los globals de vitest.
     name: 'licona/tests',
     files: ['**/*.test.ts', '**/*.spec.ts'],
