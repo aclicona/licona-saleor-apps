@@ -119,6 +119,37 @@ export async function consultarWebhooksRegistrados(opciones: OpcionesConsulta): 
   }))
 }
 
+/**
+ * Último resultado conocido de la comprobación de deriva, para reflejarlo en el
+ * healthcheck. Falla de consulta (Saleor caído, token inválido) ≠ deriva: es
+ * `desconocido` y NO se pinta de rojo, porque no sabemos que algo esté mal.
+ */
+export interface EstadoDeriva {
+  estado: 'sin_comprobar' | 'sano' | 'deriva' | 'desconocido'
+  deriva?: Deriva[]
+  motivo?: string
+}
+
+export interface SeguimientoDeriva {
+  obtener(): EstadoDeriva
+  registrar(estado: EstadoDeriva): void
+}
+
+export function crearSeguimientoDeriva(): SeguimientoDeriva {
+  let actual: EstadoDeriva = { estado: 'sin_comprobar' }
+  return {
+    obtener: () => actual,
+    registrar: (estado) => {
+      actual = estado
+    },
+  }
+}
+
+/** Texto legible de la deriva para el healthcheck (sin query, solo qué webhook y qué tipo). */
+export function resumirDeriva(deriva: Deriva[]): string {
+  return `deriva en ${deriva.length} webhook(s) — reinstalar la App: ` + deriva.map((d) => `${d.webhook} (${d.tipo})`).join(', ')
+}
+
 interface LogMinimo {
   error(obj: object, msg: string): void
   warn(obj: object, msg: string): void
@@ -136,12 +167,14 @@ export async function avisarDerivaAlArranque(opciones: {
   appToken: string
   log: LogMinimo
   fetchFn?: typeof fetch
+  seguimiento?: SeguimientoDeriva
 }): Promise<Deriva[] | null> {
-  const { webhooksManifiesto, saleorApiUrl, appToken, log, fetchFn } = opciones
+  const { webhooksManifiesto, saleorApiUrl, appToken, log, fetchFn, seguimiento } = opciones
   if (!appToken || !saleorApiUrl) return null
   try {
     const registrados = await consultarWebhooksRegistrados({ saleorApiUrl, appToken, fetchFn })
     const deriva = detectarDeriva(webhooksManifiesto, registrados)
+    seguimiento?.registrar(deriva.length > 0 ? { estado: 'deriva', deriva } : { estado: 'sano' })
     if (deriva.length > 0) {
       log.error(
         { deriva },
@@ -153,7 +186,37 @@ export async function avisarDerivaAlArranque(opciones: {
     }
     return deriva
   } catch (error) {
+    seguimiento?.registrar({ estado: 'desconocido', motivo: error instanceof Error ? error.message : String(error) })
     log.warn({ error }, 'No se pudo comprobar la deriva del manifiesto contra Saleor (se omite)')
     return null
+  }
+}
+
+/**
+ * Variante para `index.ts`: obtiene el manifiesto vivo (p. ej. `app.inject`) y
+ * lanza la comprobación. NUNCA rechaza — si falla obtener el manifiesto o
+ * escribir el log, queda `desconocido` y se intenta loguear — para que
+ * `void comprobarDerivaDesdeManifiesto(...)` no pueda producir un rechazo no
+ * manejado que tumbe el proceso.
+ */
+export async function comprobarDerivaDesdeManifiesto(opciones: {
+  obtenerWebhooksManifiesto: () => Promise<WebhookEsperado[]>
+  saleorApiUrl: string
+  appToken: string
+  log: LogMinimo
+  fetchFn?: typeof fetch
+  seguimiento?: SeguimientoDeriva
+}): Promise<void> {
+  const { obtenerWebhooksManifiesto, seguimiento, log, ...resto } = opciones
+  try {
+    const webhooksManifiesto = await obtenerWebhooksManifiesto()
+    await avisarDerivaAlArranque({ ...resto, webhooksManifiesto, log, seguimiento })
+  } catch (error) {
+    seguimiento?.registrar({ estado: 'desconocido', motivo: error instanceof Error ? error.message : String(error) })
+    try {
+      log.warn({ error }, 'No se pudo comprobar la deriva del manifiesto (se omite)')
+    } catch {
+      // un logger roto no debe convertirse en rechazo no manejado
+    }
   }
 }

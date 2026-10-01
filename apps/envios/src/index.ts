@@ -1,8 +1,8 @@
 import Fastify, { type FastifyRequest } from 'fastify'
 import { construirManifiesto } from './manifest.js'
-import { avisarDerivaAlArranque } from '@licona/webhook-utils'
+import { comprobarDerivaDesdeManifiesto } from '@licona/webhook-utils'
 import { shippingListMethodsHandler } from './webhooks/shipping-list-methods.js'
-import { manejadorListo, manejadorRegistro } from './lib/registro.js'
+import { manejadorListo, manejadorRegistro, seguimientoDeriva } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
 
 // El logger ya no se activa a pelo con `true`: `opcionesServidor()` le pone
@@ -50,12 +50,11 @@ app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
 
   // B-406: Saleor congela las suscripciones al instalar; si el manifiesto vivo ya
   // no coincide con lo instalado, se grita en el log (no repara, no bloquea).
-  void app.inject('/api/manifest').then((res) =>
-    avisarDerivaAlArranque({
-      webhooksManifiesto: res.json().webhooks,
-      saleorApiUrl: process.env.SALEOR_API_URL ?? '',
-      appToken: process.env.SALEOR_APP_TOKEN ?? '',
-      log: app.log,
-    }),
-  )
+  void comprobarDerivaDesdeManifiesto({
+    obtenerWebhooksManifiesto: async () => (await app.inject('/api/manifest')).json().webhooks,
+    saleorApiUrl: process.env.SALEOR_API_URL ?? '',
+    appToken: process.env.SALEOR_APP_TOKEN ?? '',
+    log: app.log,
+    seguimiento: seguimientoDeriva,
+  })
 })

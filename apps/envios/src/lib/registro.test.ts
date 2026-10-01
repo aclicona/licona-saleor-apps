@@ -146,3 +146,26 @@ describe('healthcheck de cadena (/api/health/ready)', () => {
     expect(res.json().checks.saleor.ok).toBe(false)
   })
 })
+
+describe('deriva del manifiesto en /api/health/ready (B-406)', () => {
+  it('con deriva → 503 con motivo; error de consulta → no rojo; sano → 200', async () => {
+    vi.stubEnv('SALEOR_API_URL', 'https://saleor.example.com/graphql/')
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    const { crearManejadorListo } = await import('./registro.js')
+    const { crearSeguimientoDeriva } = await import('@licona/webhook-utils')
+    const fetchFn = (async (u: string) =>
+      new Response(String(u).endsWith('jwks.json') ? '{"keys":[{"kid":"a"}]}' : '{"data":{}}')) as unknown as typeof fetch
+    const pedir = async (estado: import('@licona/webhook-utils').EstadoDeriva) => {
+      const seg = crearSeguimientoDeriva()
+      seg.registrar(estado)
+      const app = Fastify()
+      app.get('/r', crearManejadorListo(fetchFn, seg))
+      return app.inject({ method: 'GET', url: '/r' })
+    }
+    const rojo = await pedir({ estado: 'deriva', deriva: [{ webhook: 'w', tipo: 'AUSENTE_EN_SALEOR', detalle: 'd' }] })
+    expect(rojo.statusCode).toBe(503)
+    expect(rojo.json().checks.deriva.detalle).toContain('w (AUSENTE_EN_SALEOR)')
+    expect((await pedir({ estado: 'desconocido', motivo: 'x' })).statusCode).toBe(200)
+    expect((await pedir({ estado: 'sano' })).statusCode).toBe(200)
+  })
+})
