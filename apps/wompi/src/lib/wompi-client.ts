@@ -42,7 +42,12 @@ export interface WompiTransaction {
   currency: string
   payment_method_type: string
   redirect_url?: string
+  created_at?: string
 }
+
+/** Tope de páginas por consulta de conciliación: acota la corrida si el API pagina sin fin. */
+const MAX_PAGINAS_LISTADO = 20
+const TAM_PAGINA_LISTADO = 100
 
 export class WompiClient {
   private baseUrl: string
@@ -104,6 +109,38 @@ export class WompiClient {
     })
     if (!res.ok) throw new Error(`Wompi ${res.status}`)
     return ((await res.json()) as { data: WompiTransaction }).data
+  }
+
+  /**
+   * Lista transacciones creadas en `[desde, hasta]` para la conciliación (B-412).
+   *
+   * SUPUESTO SIN VERIFICAR contra el sandbox de Wompi: `GET /transactions?from_date&until_date&page&page_size`
+   * con la llave privada, fechas `YYYY-MM-DD` (granularidad de día, por eso se filtra después por
+   * `created_at` si viene) y respuesta `{ data: [...], meta: { total_pages } }`. Validar antes de encender.
+   */
+  async listTransactions(desde: Date, hasta: Date): Promise<WompiTransaction[]> {
+    const dia = (d: Date) => d.toISOString().slice(0, 10)
+    const todas: WompiTransaction[] = []
+    for (let pagina = 1; pagina <= MAX_PAGINAS_LISTADO; pagina++) {
+      const qs = new URLSearchParams({
+        from_date: dia(desde),
+        until_date: dia(hasta),
+        page: String(pagina),
+        page_size: String(TAM_PAGINA_LISTADO),
+      })
+      const res = await fetch(`${this.baseUrl}/transactions?${qs}`, {
+        headers: { Authorization: `Bearer ${this.config.privateKey}` },
+      })
+      if (!res.ok) throw new Error(`Wompi listado ${res.status}`)
+      const body = (await res.json()) as { data?: WompiTransaction[]; meta?: { total_pages?: number } }
+      todas.push(...(body.data ?? []))
+      if (pagina >= (body.meta?.total_pages ?? 1)) break
+    }
+    return todas.filter((t) => {
+      if (!t.created_at) return true
+      const creada = new Date(t.created_at).getTime()
+      return creada >= desde.getTime() && creada <= hasta.getTime()
+    })
   }
 
   async refundTransaction(id: string, amountInCents: number): Promise<void> {

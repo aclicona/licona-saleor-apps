@@ -119,6 +119,11 @@ por defecto (ID global de 72 caracteres terminado en `==`, nunca validado contra
 referencias alfanuméricas). Con `WOMPI_REFERENCIA_CODIFICADA=true` emite base64url sin relleno; la inversa
 acepta ambos formatos. Activar solo tras probar en sandbox de Wompi.
 
+**Conciliación (B-412):** backstop sin estado e idempotente contra el API de transacciones de Wompi
+(`apps/wompi/src/lib/conciliacion.ts`): re-reporta a Saleor lo que falte; Saleor deduplica. **APAGADO por
+defecto** (`WOMPI_CONCILIACION_HABILITADA`); sin cron cableado. Cómo encenderlo y decisiones pendientes:
+`apps/wompi/docs/conciliacion.md`.
+
 **Conversión de montos:** Saleor envía COP (ej. `120000`), Wompi espera centavos (`12000000`).
 **No multiplicar a mano** — usar `copToCents` / `centsToCop` (`apps/wompi/src/lib/money.ts`, cubiertas
 por tests desde 2026-08-22). Redondean explícitamente: en IEEE-754 `19.99 * 100` da

@@ -128,6 +128,9 @@ export const VARIABLES_OPCIONALES: ReadonlyArray<{ nombre: string; porDefecto: s
   { nombre: 'WOMPI_SANDBOX', porDefecto: 'true (cualquier valor distinto de "false" es sandbox)' },
   { nombre: 'SALEOR_APP_ID', porDefecto: 'sin uso en runtime; informativo tras instalar la App' },
   { nombre: 'WOMPI_REFERENCIA_CODIFICADA', porDefecto: 'desactivado (referencia = ID global crudo; ver lib/referencia.ts, B-397)' },
+  { nombre: 'WOMPI_CONCILIACION_HABILITADA', porDefecto: 'apagado (ruta de conciliación no registrada; ver docs/conciliacion.md, B-412)' },
+  { nombre: 'WOMPI_CONCILIACION_TOKEN', porDefecto: 'sin valor: la conciliación no se habilita sin él' },
+  { nombre: 'WOMPI_CONCILIACION_VENTANA_MINUTOS', porDefecto: '1440 (24 h)' },
   { nombre: 'APL', porDefecto: 'env' },
   { nombre: 'LOG_LEVEL', porDefecto: 'info (un valor inválido cae al default y se avisa; ver lib/logging.ts)' },
 ]

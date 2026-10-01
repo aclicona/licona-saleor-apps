@@ -1,0 +1,197 @@
+import type { FastifyReply, FastifyRequest } from 'fastify'
+import { timingSafeEqual } from 'node:crypto'
+import { centsToCop } from './money.js'
+import { transactionIdDesdeReferencia } from './referencia.js'
+import { CODIGO_IMPORTE_INCONSISTENTE, CODIGO_TRANSACCION_INEXISTENTE } from './saleor-errors.js'
+import type { SaleorTransactionEventType, TransactionEventReportResult } from './saleor-client.js'
+import { WOMPI_TO_SALEOR } from '../webhooks/wompi-incoming.js'
+
+/**
+ * Backstop de conciliación contra el API de Wompi (B-412).
+ *
+ * Los reintentos de Wompi son finitos: si Saleor está caído más que su ventana, la confirmación de un
+ * pago real se pierde. Este módulo es la red de seguridad. NO es una cola ni guarda estado: consulta
+ * las transacciones recientes en Wompi y re-reporta cada una a Saleor con el MISMO contrato que el
+ * webhook entrante (mismo mapeo `WOMPI_TO_SALEOR`, misma conversión de importe, mismo `pspReference`).
+ * La idempotencia es de Saleor (`transactionEventReport` deduplica por pspReference + tipo + importe):
+ * lo que ya estaba reportado vuelve `alreadyProcessed` y no cambia nada.
+ *
+ * Todo entra por interfaces (`FuenteTransaccionesWompi`, `ReportadorSaleor`) para probarlo con dobles.
+ * No cambia el mapeo de estados: lo importa tal cual del handler entrante.
+ */
+
+export interface TransaccionConciliable {
+  id: string
+  status: string
+  reference: string
+  amount_in_cents: number
+}
+
+export interface VentanaConsulta {
+  desde: Date
+  hasta: Date
+}
+
+export interface FuenteTransaccionesWompi {
+  /** Transacciones creadas dentro de la ventana. Lanza si el API de Wompi falla. */
+  listarTransacciones(ventana: VentanaConsulta): Promise<TransaccionConciliable[]>
+}
+
+export interface ReportadorSaleor {
+  reportar(params: {
+    transactionId: string
+    type: SaleorTransactionEventType
+    amount: number
+    pspReference: string
+    message?: string
+  }): Promise<TransactionEventReportResult>
+}
+
+export interface LogConciliacion {
+  info(obj: object, msg: string): void
+  warn(obj: object, msg: string): void
+  error(obj: object, msg: string): void
+  fatal(obj: object, msg: string): void
+}
+
+export interface ResultadoConciliacion {
+  revisadas: number
+  /** Ya estaban en Saleor (`alreadyProcessed`): sin cambios. */
+  yaReportadas: number
+  /** Faltaban en Saleor y se re-reportaron: señal de que una entrega del webhook se perdió. */
+  reportadas: number
+  /** Estado sin mapeo (p. ej. PENDING). */
+  sinMapeo: number
+  /** Referencia que no es un ID de Saleor (ajena a esta integración). */
+  omitidas: number
+  /** Fallos por transacción (Saleor, importe corrupto, rechazo de negocio). */
+  errores: number
+  /** El listado en Wompi falló: no se revisó nada. */
+  errorApi: boolean
+}
+
+export async function conciliarTransaccionesWompi(deps: {
+  wompi: FuenteTransaccionesWompi
+  saleor: ReportadorSaleor
+  ventana: VentanaConsulta
+  log: LogConciliacion
+}): Promise<ResultadoConciliacion> {
+  const { wompi, saleor, ventana, log } = deps
+  const r: ResultadoConciliacion = {
+    revisadas: 0, yaReportadas: 0, reportadas: 0, sinMapeo: 0, omitidas: 0, errores: 0, errorApi: false,
+  }
+
+  let transacciones: TransaccionConciliable[]
+  try {
+    transacciones = await wompi.listarTransacciones(ventana)
+  } catch (error) {
+    r.errorApi = true
+    log.error({ error, desde: ventana.desde, hasta: ventana.hasta }, 'Conciliación: el API de Wompi falló; no se revisó nada. La próxima corrida reintenta')
+    return r
+  }
+
+  for (const txn of transacciones) {
+    r.revisadas++
+    const campos = { pspReference: txn.id, referencia: txn.reference, estadoWompi: txn.status }
+
+    const tipo = WOMPI_TO_SALEOR[txn.status]
+    if (!tipo) {
+      r.sinMapeo++
+      continue
+    }
+
+    let importeCop: number
+    try {
+      importeCop = centsToCop(txn.amount_in_cents)
+    } catch (error) {
+      r.errores++
+      log.fatal({ ...campos, amountInCents: txn.amount_in_cents, error }, 'Conciliación: importe de Wompi corrupto; no se reporta. Requiere revisión humana')
+      continue
+    }
+
+    const transactionId = transactionIdDesdeReferencia(txn.reference)
+    if (!transactionId) {
+      r.omitidas++
+      if (txn.status === 'APPROVED') {
+        log.fatal({ ...campos, importeCop }, 'Conciliación: pago APROBADO cuya referencia no es un ID de Saleor — dinero cobrado sin destino, requiere revisión humana')
+      } else {
+        log.warn({ ...campos, importeCop }, 'Conciliación: referencia ajena a esta integración en un pago no aprobado; se omite')
+      }
+      continue
+    }
+
+    try {
+      const res = await saleor.reportar({
+        transactionId,
+        type: tipo,
+        amount: importeCop,
+        pspReference: txn.id,
+        message: `Wompi: ${txn.status}`,
+      })
+
+      if (res.errors.length > 0) {
+        r.errores++
+        const codigos = res.errors.map((e) => e.code)
+        const critico =
+          codigos.includes(CODIGO_IMPORTE_INCONSISTENTE) ||
+          (codigos.includes(CODIGO_TRANSACCION_INEXISTENTE) && tipo === 'CHARGE_SUCCESS')
+        const registrar = critico ? log.fatal : log.error
+        registrar.call(log, { ...campos, tipo, importeCop, errores: res.errors }, 'Conciliación: Saleor rechazó el evento. Permanente — requiere revisión humana')
+      } else if (res.alreadyProcessed) {
+        r.yaReportadas++
+      } else {
+        r.reportadas++
+        log.warn({ ...campos, tipo, importeCop }, 'Conciliación: el evento faltaba en Saleor y se re-reportó (¿se perdió una entrega del webhook de Wompi?)')
+      }
+    } catch (error) {
+      r.errores++
+      log.error({ ...campos, tipo, error }, 'Conciliación: no se pudo reportar a Saleor; se sigue con las demás. La próxima corrida reintenta')
+    }
+  }
+
+  log.info({ ...r, desde: ventana.desde, hasta: ventana.hasta }, 'Conciliación terminada')
+  return r
+}
+
+// ─── Configuración (APAGADO por defecto) ─────────────────────────────────────
+
+const VENTANA_POR_DEFECTO_MIN = 24 * 60
+const VENTANA_MAXIMA_MIN = 7 * 24 * 60
+
+/** Solo `"true"` exacto la enciende, y exige además el token del endpoint. */
+export function conciliacionHabilitada(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.WOMPI_CONCILIACION_HABILITADA === 'true' && (env.WOMPI_CONCILIACION_TOKEN ?? '').trim() !== ''
+}
+
+/** Ventana `[ahora - N min, ahora]`; N inválido, ≤ 0 o > 7 días cae al default de 24 h. */
+export function ventanaDeConciliacion(env: NodeJS.ProcessEnv = process.env, ahora: Date = new Date()): VentanaConsulta {
+  const n = Number(env.WOMPI_CONCILIACION_VENTANA_MINUTOS)
+  const minutos = Number.isInteger(n) && n > 0 && n <= VENTANA_MAXIMA_MIN ? n : VENTANA_POR_DEFECTO_MIN
+  return { desde: new Date(ahora.getTime() - minutos * 60_000), hasta: ahora }
+}
+
+// ─── Disparo por HTTP (protegido) ────────────────────────────────────────────
+
+function tokenValido(cabecera: string | undefined, esperado: string): boolean {
+  const recibido = Buffer.from((cabecera ?? '').replace(/^Bearer /, ''))
+  const esperadoBuf = Buffer.from(esperado)
+  return recibido.length === esperadoBuf.length && timingSafeEqual(recibido, esperadoBuf)
+}
+
+/**
+ * Handler de `POST /api/conciliacion/ejecutar`. La ruta solo se registra si `conciliacionHabilitada()`;
+ * aun así exige `Authorization: Bearer <WOMPI_CONCILIACION_TOKEN>`. Síncrono: devuelve el resumen.
+ */
+export function crearHandlerConciliacion(deps: { wompi: FuenteTransaccionesWompi; saleor: ReportadorSaleor }) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!tokenValido(req.headers.authorization, process.env.WOMPI_CONCILIACION_TOKEN ?? '')) {
+      return reply.status(401).send({ error: 'No autorizado' })
+    }
+    const resultado = await conciliarTransaccionesWompi({
+      ...deps,
+      ventana: ventanaDeConciliacion(),
+      log: req.log.child({ webhook: 'conciliacion' }),
+    })
+    return reply.status(resultado.errorApi ? 502 : 200).send(resultado)
+  }
+}

@@ -29,7 +29,7 @@ import { transactionIdDesdeReferencia } from '../lib/referencia.js'
  * Estados de Wompi (PENDING, APPROVED, DECLINED, VOIDED, ERROR): ver
  * `docs/wompi-estados.md`.
  */
-const WOMPI_TO_SALEOR: Record<string, 'CHARGE_SUCCESS' | 'CHARGE_FAILURE'> = {
+export const WOMPI_TO_SALEOR: Record<string, 'CHARGE_SUCCESS' | 'CHARGE_FAILURE'> = {
   APPROVED: 'CHARGE_SUCCESS',
   DECLINED: 'CHARGE_FAILURE',
   ERROR: 'CHARGE_FAILURE',
