@@ -111,7 +111,9 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     // "Wompi cambió el formato del evento y hay que actualizar la App" — dos
     // incidentes muy distintos que sin esto se ven exactamente igual en el log.
     log.warn(
-      { motivo: firma.motivo, detalle: firma.detalle, rawBody },
+      // Sin rawBody: el cuerpo trae email y nombre del titular (PII). La
+      // correlación (id de transacción) ya viaja en los bindings de `log`.
+      { motivo: firma.motivo, detalle: firma.detalle, evento: (event as { event?: string })?.event ?? null },
       'Firma de Wompi inválida — evento rechazado sin reportar a Saleor',
     )
     return reply.status(401).send({ error: 'Firma inválida' })

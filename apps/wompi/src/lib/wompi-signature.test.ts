@@ -7,7 +7,7 @@ import { construirCadenaAFirmar, verificarFirmaWompi, type EventoFirmado } from 
  * (https://docs.wompi.co/en/docs/colombia/eventos/).
  *
  * SHA-256 (no HMAC) sobre la concatenación sin separadores de:
- *   valores de `signature.properties` (en su orden) + `signature.timestamp` + secreto.
+ *   valores de `signature.properties` (en su orden) + `timestamp` (RAÍZ del evento) + secreto.
  */
 
 const SECRET = 'test_events_secreto'
@@ -29,15 +29,98 @@ function evento(overrides: Partial<{ id: string; status: string; amount_in_cents
         ...overrides,
       },
     },
+    timestamp: 1_700_000_000,
     signature: {
       properties: ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'],
-      timestamp: 1_700_000_000,
     },
   } as EventoFirmado
 }
 
 /** Cadena que corresponde al evento de referencia sin overrides. */
 const CADENA_REFERENCIA = 'wompi-txn-12345APPROVED120000001700000000test_events_secreto'
+
+describe('verificarFirmaWompi — evento REAL de Wompi (B-431)', () => {
+  const SECRETO_EVENTOS = 'test_events_ficticio_b431'
+
+  /** Forma exacta del primer evento real recibido el 2026-10-06: timestamp en la RAÍZ. */
+  function eventoReal(): Record<string, unknown> {
+    return {
+      event: 'transaction.updated',
+      data: {
+        transaction: {
+          id: '12084641-1791294667-72838',
+          created_at: '2026-10-06T13:51:07.668Z',
+          amount_in_cents: 1_800_000,
+          reference: 'VHJhbnNhY3Rpb25JdGVtOmIxYzkzNThl',
+          currency: 'COP',
+          payment_method_type: 'CARD',
+          payment_method: { type: 'CARD', extra: { brand: 'VISA', last_four: '4242' }, installments: 1 },
+          status: 'APPROVED',
+          status_message: null,
+        },
+      },
+      sent_at: '2026-10-06T13:51:14.234Z',
+      timestamp: 1_791_294_674,
+      signature: {
+        checksum: '',
+        properties: ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'],
+      },
+      environment: 'test',
+    }
+  }
+
+  const CADENA_REAL = '12084641-1791294667-72838APPROVED18000001791294674' + SECRETO_EVENTOS
+
+  function firmado(mutar?: (e: Record<string, any>) => void): EventoFirmado {
+    const e = eventoReal() as Record<string, any>
+    e.signature.checksum = sha256Hex(CADENA_REAL)
+    mutar?.(e)
+    return e as EventoFirmado
+  }
+
+  it('acepta el evento con el timestamp en la raíz y checksum calculado según la doc', () => {
+    expect(construirCadenaAFirmar(firmado(), SECRETO_EVENTOS)).toBe(CADENA_REAL)
+    expect(verificarFirmaWompi(firmado(), undefined, SECRETO_EVENTOS)).toEqual({ valido: true })
+  })
+
+  it('rechaza el checksum alterado', () => {
+    const e = firmado((x) => {
+      x.signature.checksum = 'f'.repeat(64)
+    })
+    expect(verificarFirmaWompi(e, undefined, SECRETO_EVENTOS)).toMatchObject({ motivo: 'CHECKSUM_NO_COINCIDE' })
+  })
+
+  it('rechaza si cambia el timestamp raíz respecto del firmado', () => {
+    const e = firmado((x) => {
+      x.timestamp = 1_791_294_675
+    })
+    expect(verificarFirmaWompi(e, undefined, SECRETO_EVENTOS)).toMatchObject({ motivo: 'CHECKSUM_NO_COINCIDE' })
+  })
+
+  it('NO acepta la forma inventada: timestamp solo dentro de signature', () => {
+    const e = firmado((x) => {
+      x.signature.timestamp = x.timestamp
+      delete x.timestamp
+    })
+    expect(verificarFirmaWompi(e, undefined, SECRETO_EVENTOS)).toMatchObject({ motivo: 'TIMESTAMP_INVALIDO' })
+  })
+
+  it('resuelve las propiedades en el orden que el evento indica', () => {
+    const e = firmado((x) => {
+      x.signature.properties = ['transaction.amount_in_cents', 'transaction.id']
+      x.signature.checksum = sha256Hex('180000012084641-1791294667-728381791294674' + SECRETO_EVENTOS)
+    })
+    expect(verificarFirmaWompi(e, undefined, SECRETO_EVENTOS)).toEqual({ valido: true })
+  })
+
+  it('resuelve una propiedad anidada del evento real', () => {
+    const e = firmado((x) => {
+      x.signature.properties = ['transaction.payment_method.extra.last_four']
+      x.signature.checksum = sha256Hex('42421791294674' + SECRETO_EVENTOS)
+    })
+    expect(verificarFirmaWompi(e, undefined, SECRETO_EVENTOS)).toEqual({ valido: true })
+  })
+})
 
 describe('construirCadenaAFirmar — vector de la documentación de Wompi', () => {
   it('reproduce LITERALMENTE la cadena del ejemplo publicado por Wompi', () => {
@@ -51,9 +134,9 @@ describe('construirCadenaAFirmar — vector de la documentación de Wompi', () =
           amount_in_cents: 4_490_000,
         },
       },
+      timestamp: 1_530_291_411,
       signature: {
         properties: ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'],
-        timestamp: 1_530_291_411,
       },
     } as EventoFirmado
 
@@ -74,9 +157,9 @@ describe('construirCadenaAFirmar — vector de la documentación de Wompi', () =
       data: {
         transaction: { id: '1234-1610641025-49201', status: 'APPROVED', amount_in_cents: 4_490_000 },
       },
+      timestamp: 1_530_291_411,
       signature: {
         properties: ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'],
-        timestamp: 1_530_291_411,
         checksum: sha256Hex(
           '1234-1610641025-49201APPROVED44900001530291411prod_events_OcHnIzeBl5socpwByQ4hA52Em3USQ93Z',
         ).toUpperCase(),
@@ -183,7 +266,7 @@ describe('verificarFirmaWompi — manipulación del evento', () => {
   it('rechaza si se manipula el timestamp firmado', () => {
     const checksumLegitimo = sha256Hex(CADENA_REFERENCIA)
     const e = evento()
-    ;(e.signature as { timestamp: number }).timestamp = 1_799_999_999
+    ;(e as { timestamp: number }).timestamp = 1_799_999_999
 
     expect(verificarFirmaWompi(e, checksumLegitimo, SECRET)).toMatchObject({
       valido: false,
@@ -225,7 +308,7 @@ describe('verificarFirmaWompi — signature.properties variable (no está codifi
   it('valida un evento que firma propiedades DISTINTAS de las de una transacción', () => {
     const e: EventoFirmado = {
       data: { nequi: { status: 'APPROVED', token: 'tok-abc' } },
-      signature: { properties: ['nequi.token', 'nequi.status'], timestamp: 1_700_000_000 },
+      timestamp: 1_700_000_000, signature: { properties: ['nequi.token', 'nequi.status'] },
     } as EventoFirmado
 
     const cadena = construirCadenaAFirmar(e, SECRET)
@@ -236,7 +319,7 @@ describe('verificarFirmaWompi — signature.properties variable (no está codifi
   it('resuelve rutas anidadas de más de dos niveles', () => {
     const e: EventoFirmado = {
       data: { transaction: { payment_method: { extra: { bank_name: 'Bancolombia' } } } },
-      signature: { properties: ['transaction.payment_method.extra.bank_name'], timestamp: 42 },
+      timestamp: 42, signature: { properties: ['transaction.payment_method.extra.bank_name'] },
     } as EventoFirmado
 
     expect(construirCadenaAFirmar(e, SECRET)).toBe('Bancolombia42test_events_secreto')
@@ -245,7 +328,7 @@ describe('verificarFirmaWompi — signature.properties variable (no está codifi
   it('firma una sola propiedad cuando el evento solo lista una', () => {
     const e: EventoFirmado = {
       data: { transaction: { status: 'VOIDED' } },
-      signature: { properties: ['transaction.status'], timestamp: 7 },
+      timestamp: 7, signature: { properties: ['transaction.status'] },
     } as EventoFirmado
 
     expect(construirCadenaAFirmar(e, SECRET)).toBe('VOIDED7test_events_secreto')
@@ -311,11 +394,11 @@ describe('verificarFirmaWompi — casos degenerados (todos rechazan)', () => {
   it('rechaza si una propiedad listada resuelve a null o a un objeto', () => {
     const conNull = {
       data: { transaction: { id: null } },
-      signature: { properties: ['transaction.id'], timestamp: 1 },
+      timestamp: 1, signature: { properties: ['transaction.id'] },
     } as unknown as EventoFirmado
     const conObjeto = {
       data: { transaction: { id: { anidado: 1 } } },
-      signature: { properties: ['transaction.id'], timestamp: 1 },
+      timestamp: 1, signature: { properties: ['transaction.id'] },
     } as unknown as EventoFirmado
 
     expect(verificarFirmaWompi(conNull, checksumCualquiera, SECRET)).toMatchObject({ motivo: 'PROPIEDAD_IRRESOLUBLE' })
@@ -355,7 +438,7 @@ describe('verificarFirmaWompi — casos degenerados (todos rechazan)', () => {
 
   it('rechaza si falta el timestamp', () => {
     const e = evento()
-    delete (e.signature as { timestamp?: number }).timestamp
+    delete (e as { timestamp?: number }).timestamp
 
     expect(verificarFirmaWompi(e, checksumCualquiera, SECRET)).toMatchObject({
       valido: false,
@@ -366,7 +449,7 @@ describe('verificarFirmaWompi — casos degenerados (todos rechazan)', () => {
   it('rechaza un timestamp que no es un entero UNIX', () => {
     for (const malo of [1.5, -1, NaN, Infinity, 'ayer', '17e9', {}, null]) {
       const e = evento()
-      ;(e.signature as { timestamp: unknown }).timestamp = malo
+      ;(e as { timestamp: unknown }).timestamp = malo
       expect(verificarFirmaWompi(e, checksumCualquiera, SECRET)).toMatchObject({ motivo: 'TIMESTAMP_INVALIDO' })
     }
   })
@@ -374,7 +457,7 @@ describe('verificarFirmaWompi — casos degenerados (todos rechazan)', () => {
   it('acepta el timestamp en su forma de cadena de dígitos', () => {
     // Misma representación textual, así que aceptarlo no relaja nada.
     const e = evento()
-    ;(e.signature as { timestamp: unknown }).timestamp = '1700000000'
+    ;(e as { timestamp: unknown }).timestamp = '1700000000'
 
     expect(verificarFirmaWompi(e, sha256Hex(CADENA_REFERENCIA), SECRET)).toEqual({ valido: true })
   })

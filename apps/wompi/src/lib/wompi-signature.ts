@@ -13,9 +13,9 @@
  *      de la doc bajo la que eso coincida.
  *   2. **No se firma el cuerpo entero**, sino la concatenación SIN separadores de
  *      los *valores* de las propiedades que el propio evento enumera en
- *      `signature.properties`, seguidos del `signature.timestamp` y del secreto.
+ *      `signature.properties`, seguidos del `timestamp` y del secreto.
  *   3. Las cabeceras que leía **no existen**: el checksum llega en `X-Event-Checksum`
- *      y en `signature.checksum`; el timestamp llega solo en `signature.timestamp`.
+ *      y en `signature.checksum`; el timestamp llega en la RAÍZ del evento (`timestamp`), NO dentro de `signature`.
  *
  * Consecuencia del bug: no existía configuración en la que el webhook funcionara.
  * Con el secreto puesto, esas cabeceras llegaban vacías y TODA confirmación
@@ -26,7 +26,7 @@
  *
  *   1. el valor de cada ruta de `signature.properties`, EN EL ORDEN DE LA LISTA,
  *      resuelta contra `data` (`"transaction.id"` → `data.transaction.id`);
- *   2. `signature.timestamp`;
+ *   2. `timestamp`, el de la RAÍZ del evento (no existe `signature.timestamp`);
  *   3. el secreto de eventos.
  *
  * y se le aplica SHA-256. Ejemplo literal de la doc:
@@ -91,16 +91,28 @@ export type ResultadoFirma =
 /** Forma mínima del evento que esta verificación necesita. El resto del cuerpo no se firma. */
 export interface EventoFirmado {
   data?: unknown
+  /** Entero UNIX en la RAÍZ del evento (no dentro de `signature`); entra en la cadena firmada. */
+  timestamp?: unknown
   signature?: {
     properties?: unknown
     checksum?: unknown
-    timestamp?: unknown
   }
 }
 
 function invalido(motivo: MotivoFirmaInvalida, detalle: string): ResultadoFirma {
   return { valido: false, motivo, detalle }
 }
+
+/**
+ * ── Bug B-431 (2026-10-06) ───────────────────────────────────────────────────
+ * Este módulo leía el timestamp de `signature.timestamp`, una forma que Wompi
+ * NUNCA envía (los tests fabricaban esa forma y por eso no se detectó). El
+ * primer evento real de producción lo trae en la raíz del JSON
+ * (`{"event":…,"data":…,"timestamp":1791294674,"signature":{"checksum","properties"}}`)
+ * y se rechazaba con 401/TIMESTAMP_INVALIDO. NO se mantiene fallback a
+ * `signature.timestamp`: no existe en Wompi y aceptarlo solo ampliaría la
+ * superficie (un atacante podría elegir de dónde sale el timestamp firmado).
+ */
 
 /**
  * Resuelve una ruta con puntos (`"transaction.amount_in_cents"`) contra el
@@ -149,14 +161,14 @@ export function construirCadenaAFirmar(evento: EventoFirmado, secret: string): s
     valores.push(valor)
   }
 
-  const timestamp = normalizarTimestamp(evento?.signature?.timestamp)
+  const timestamp = normalizarTimestamp(evento?.timestamp)
   if (timestamp === null) return null
 
   return valores.join('') + timestamp + secret
 }
 
 /**
- * Normaliza `signature.timestamp` a su forma textual. Wompi lo envía como
+ * Normaliza el `timestamp` raíz a su forma textual. Wompi lo envía como
  * entero UNIX; se admite además la cadena de dígitos equivalente porque su
  * representación es idéntica y aceptarla no relaja nada. Cualquier otra cosa
  * (decimal, negativo, texto, ausente) se rechaza.
@@ -228,7 +240,7 @@ function checksumDelCuerpo(evento: EventoFirmado): string | undefined {
  *   cuerpo); que difieran significa que alguien tocó una de las dos. Se exige que
  *   TODA copia presente coincida con el checksum calculado, no solo una: aceptar
  *   «que cuadre alguna» convertiría dos copias en dos intentos.
- * - **`timestamp` ausente o no entero** → rechazo. Entra literalmente en la
+ * - **`timestamp` raíz ausente o no entero** → rechazo. Entra literalmente en la
  *   cadena; sin él no hay cadena que calcular.
  * - **Secreto vacío** → rechazo explícito. El fail-fast del arranque
  *   (`lib/config.ts`) ya impide llegar aquí, pero si alguien reintrodujera el
@@ -265,8 +277,8 @@ export function verificarFirmaWompi(
     }
   }
 
-  if (normalizarTimestamp(evento.signature.timestamp) === null) {
-    return invalido('TIMESTAMP_INVALIDO', 'signature.timestamp ausente o no es un entero UNIX')
+  if (normalizarTimestamp(evento.timestamp) === null) {
+    return invalido('TIMESTAMP_INVALIDO', 'timestamp (raíz del evento) ausente o no es un entero UNIX')
   }
 
   const delCuerpo = checksumDelCuerpo(evento)

@@ -31,7 +31,7 @@ const REFERENCIA_SALEOR = 'VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzL
  * Reimplementación INDEPENDIENTE del checksum documentado por Wompi
  * (https://docs.wompi.co/en/docs/colombia/eventos/): SHA-256 sobre la
  * concatenación sin separadores de los valores de `signature.properties`, el
- * `signature.timestamp` y el secreto de eventos.
+ * `timestamp` (raíz) y el secreto de eventos.
  *
  * Se reimplementa aquí a propósito, sin importar nada de `lib/wompi-signature`:
  * si el test firmara con el mismo código que verifica, un error en el algoritmo
@@ -49,7 +49,7 @@ function calcularChecksum(evento: EventoDePrueba, secret: string): string {
   // Mayúsculas: es como Wompi lo publica, y de paso ejercita que la comparación
   // del handler no dependa de mayúsculas/minúsculas.
   return createHash('sha256')
-    .update(valores.join('') + evento.signature.timestamp + secret)
+    .update(valores.join('') + evento.timestamp + secret)
     .digest('hex')
     .toUpperCase()
 }
@@ -57,7 +57,8 @@ function calcularChecksum(evento: EventoDePrueba, secret: string): string {
 interface EventoDePrueba {
   event?: string
   data: Record<string, unknown>
-  signature: { properties: string[]; timestamp: number; checksum?: string }
+  timestamp: number
+  signature: { properties: string[]; checksum?: string }
 }
 
 /** Dónde se coloca el checksum: Wompi lo envía por los dos sitios a la vez. */
@@ -152,9 +153,9 @@ function eventoWompi(
         ...overrides,
       },
     },
+    timestamp: 1_700_000_000,
     signature: {
       properties: ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'],
-      timestamp: 1_700_000_000,
     },
   }
 }
@@ -246,7 +247,7 @@ describe('wompiIncomingHandler — verificación de firma', () => {
     const evento = eventoWompi()
     const checksumLegitimo = calcularChecksum(evento, SECRET)
     const { req } = crearRequest({
-      evento: { ...evento, signature: { ...evento.signature, timestamp: 1_799_999_999 } },
+      evento: { ...evento, timestamp: 1_799_999_999 },
       checksum: checksumLegitimo,
     })
     const { reply, captura } = crearReply()
@@ -574,7 +575,7 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
       evento: {
         event: 'nequi_token.updated',
         data: { nequi: { status: 'APPROVED' } },
-        signature: { properties: ['nequi.status'], timestamp: 1_700_000_000 },
+        timestamp: 1_700_000_000, signature: { properties: ['nequi.status'] },
       },
     })
     const { reply, captura } = crearReply()

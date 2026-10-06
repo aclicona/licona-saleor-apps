@@ -155,7 +155,7 @@ Cada pasarela define su propio esquema y **hay que leer su documentación, no as
 **Wompi** (verificado contra https://docs.wompi.co/en/docs/colombia/eventos/):
 - **SHA-256 simple**, no HMAC.
 - Se firma la concatenación **sin separadores** de los *valores* de las propiedades que el propio
-  evento lista en `signature.properties`, seguidos de `signature.timestamp` y del **secreto de
+  evento lista en `signature.properties`, seguidos del `timestamp` de la **RAÍZ** del evento (no existe `signature.timestamp`; B-431) y del **secreto de
   eventos** (distinto de la llave de integridad, que firma la *creación* de transacciones).
 - `signature.properties` **varía entre eventos**: hay que leer la lista de cada evento, nunca
   codificarla fija.
