@@ -75,17 +75,73 @@ describe('WompiClient.integritySignature — firma de integridad del cobro', () 
 describe('WompiClient.listTransactions — consulta para la conciliación (B-412)', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
-  it('pagina, autentica con la llave privada y filtra por created_at', async () => {
+  const pag = (ids: string[], meta?: Record<string, number>) => ({
+    ok: true,
+    json: () => Promise.resolve({ data: ids.map((id) => ({ id, created_at: '2026-10-02T10:00:00Z' })), ...(meta ? { meta } : {}) }),
+  })
+  const D = new Date('2026-10-01T00:00:00Z')
+  const H = new Date('2026-10-02T12:00:00Z')
+
+  it('autentica con la llave privada, filtra por created_at y envía page/page_size', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        data: [{ id: 'a', created_at: '2026-10-02T10:00:00Z' }, { id: 'b', created_at: '2026-09-01T10:00:00Z' }],
+        meta: { page: 1, page_size: 100, total_results: 2 },
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await crearClientePrueba().listTransactions(D, H)
+    expect(r.map((t) => t.id)).toEqual(['a'])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toContain('/transactions?from_date=2026-10-01&until_date=2026-10-02&page=1&page_size=100')
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer prv_test_key')
+  })
+
+  it('con la forma real de Wompi ({page, page_size, total_results}) lee todas las páginas', async () => {
+    // Medido en el sandbox: 12 resultados con page_size 5 → páginas de 5, 5 y 2. Wompi NO envía total_pages.
+    const llena = (n: number) => Array.from({ length: 5 }, (_, k) => `t${n}-${k}`)
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(({ data: [{ id: 'a', created_at: '2026-10-02T10:00:00Z' }], meta: { total_pages: 2 } })) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(({ data: [{ id: 'b', created_at: '2026-09-01T10:00:00Z' }], meta: { total_pages: 2 } })) })
+      .mockResolvedValueOnce(pag(llena(1), { page: 1, page_size: 5, total_results: 12 }))
+      .mockResolvedValueOnce(pag(llena(2), { page: 2, page_size: 5, total_results: 12 }))
+      .mockResolvedValueOnce(pag(['t3-0', 't3-1'], { page: 3, page_size: 5, total_results: 12 }))
     vi.stubGlobal('fetch', fetchMock)
-    const r = await crearClientePrueba().listTransactions(new Date('2026-10-01T00:00:00Z'), new Date('2026-10-02T12:00:00Z'))
-    expect(r.map((t) => t.id)).toEqual(['a'])
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[0][0]).toContain('/transactions?from_date=2026-10-01&until_date=2026-10-02&page=1')
-    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer prv_test_key')
+    const r = await crearClientePrueba().listTransactions(D, H)
+    expect(r).toHaveLength(12)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('sin meta: sigue mientras la página venga llena y corta en la primera corta', async () => {
+    const llena = Array.from({ length: 100 }, (_, k) => `x${k}`)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(pag(llena))
+      .mockResolvedValueOnce(pag(llena.map((i) => i + 'b')))
+      .mockResolvedValueOnce(pag(['ultima']))
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await crearClientePrueba().listTransactions(D, H)
+    expect(r).toHaveLength(201)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('una página vacía corta el listado', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(pag([], { page: 1, page_size: 100, total_results: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await crearClientePrueba().listTransactions(D, H)
+    expect(r).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('tope de seguridad: si la API nunca termina, corta y registra un aviso', async () => {
+    const llena = Array.from({ length: 100 }, (_, k) => `y${k}`)
+    const fetchMock = vi.fn().mockResolvedValue(pag(llena, { page: 1, page_size: 100, total_results: 999999 }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchMock)
+    await crearClientePrueba().listTransactions(D, H)
+    expect(fetchMock).toHaveBeenCalledTimes(20)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('tope'))
+    warn.mockRestore()
   })
 
   it('lanza si el API responde error (la conciliación lo registra)', async () => {

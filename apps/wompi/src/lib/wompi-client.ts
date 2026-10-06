@@ -114,9 +114,11 @@ export class WompiClient {
   /**
    * Lista transacciones creadas en `[desde, hasta]` para la conciliación (B-412).
    *
-   * SUPUESTO SIN VERIFICAR contra el sandbox de Wompi: `GET /transactions?from_date&until_date&page&page_size`
-   * con la llave privada, fechas `YYYY-MM-DD` (granularidad de día, por eso se filtra después por
-   * `created_at` si viene) y respuesta `{ data: [...], meta: { total_pages } }`. Validar antes de encender.
+   * `GET /transactions?from_date&until_date&page&page_size` con la llave privada, fechas `YYYY-MM-DD`
+   * (granularidad de día, por eso se filtra después por `created_at` si viene). Verificado contra el sandbox:
+   * la respuesta es `{ data: [...], meta: { page, page_size, total_results } }`; Wompi NO envía `total_pages`.
+   * Se pagina con `ceil(total_results / page_size)` y, por defensa ante un `meta` ausente, también se corta
+   * al recibir una página vacía o con menos filas que `page_size`. `MAX_PAGINAS_LISTADO` evita un bucle infinito.
    */
   async listTransactions(desde: Date, hasta: Date): Promise<WompiTransaction[]> {
     const dia = (d: Date) => d.toISOString().slice(0, 10)
@@ -132,9 +134,21 @@ export class WompiClient {
         headers: { Authorization: `Bearer ${this.config.privateKey}` },
       })
       if (!res.ok) throw new Error(`Wompi listado ${res.status}`)
-      const body = (await res.json()) as { data?: WompiTransaction[]; meta?: { total_pages?: number } }
-      todas.push(...(body.data ?? []))
-      if (pagina >= (body.meta?.total_pages ?? 1)) break
+      const body = (await res.json()) as {
+        data?: WompiTransaction[]
+        meta?: { page?: number; page_size?: number; total_results?: number }
+      }
+      const filas = body.data ?? []
+      todas.push(...filas)
+      const { total_results: total, page_size: tamMeta } = body.meta ?? {}
+      const tam = tamMeta || TAM_PAGINA_LISTADO
+      if (filas.length === 0 || filas.length < tam) break
+      if (total != null && pagina >= Math.ceil(total / tam)) break
+      if (pagina === MAX_PAGINAS_LISTADO) {
+        console.warn(
+          `Wompi listado: se alcanzó el tope de ${MAX_PAGINAS_LISTADO} páginas (${todas.length} transacciones); puede haber más sin conciliar`,
+        )
+      }
     }
     return todas.filter((t) => {
       if (!t.created_at) return true
