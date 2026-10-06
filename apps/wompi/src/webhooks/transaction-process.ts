@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
+import { accionesParaResultado } from '../lib/acciones.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 
 interface TransactionProcessPayload {
@@ -45,10 +46,12 @@ export async function transactionProcessHandler(req: FastifyRequest, reply: Fast
   try {
     const wompiTxn = await wompiClient().getTransaction(transaction.pspReference)
     log.info({ estadoWompi: wompiTxn.status }, 'Estado consultado en Wompi')
+    const result = WOMPI_STATUS_MAP[wompiTxn.status] ?? 'CHARGE_ACTION_REQUIRED'
     return reply.send({
-      result: WOMPI_STATUS_MAP[wompiTxn.status] ?? 'CHARGE_ACTION_REQUIRED',
+      result,
       amount: action.amount,
       pspReference: transaction.pspReference,
+      actions: accionesParaResultado(result),
     })
   } catch (error) {
     log.error(error)

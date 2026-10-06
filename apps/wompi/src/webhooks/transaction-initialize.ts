@@ -1,3 +1,4 @@
+import { accionesParaResultado } from '../lib/acciones.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
@@ -135,6 +136,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       result: 'CHARGE_ACTION_REQUIRED',
       amount: action.amount,
       pspReference: wompiTxn.id,
+      actions: accionesParaResultado('CHARGE_ACTION_REQUIRED'),
       data: { redirectUrl: wompiTxn.redirect_url, wompiTransactionId: wompiTxn.id },
     })
   } catch (error) {

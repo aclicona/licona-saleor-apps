@@ -1,4 +1,5 @@
 import { GraphQLClient, gql } from 'graphql-request'
+import { accionesParaEvento } from './acciones.js'
 
 const TRANSACTION_EVENT_REPORT = gql`
   mutation TransactionEventReport(
@@ -7,6 +8,7 @@ const TRANSACTION_EVENT_REPORT = gql`
     $amount: PositiveDecimal!
     $pspReference: String!
     $message: String
+    $availableActions: [TransactionActionEnum!]
   ) {
     transactionEventReport(
       id: $transactionId
@@ -14,6 +16,7 @@ const TRANSACTION_EVENT_REPORT = gql`
       amount: $amount
       pspReference: $pspReference
       message: $message
+      availableActions: $availableActions
     ) {
       alreadyProcessed
       transaction { id }
@@ -106,6 +109,7 @@ export async function reportTransactionEvent(params: {
       amount: params.amount.toString(),
       pspReference: params.pspReference,
       message: params.message,
+      availableActions: accionesParaEvento(params.type),
     },
     signal: AbortSignal.timeout(TIMEOUT_SALEOR_MS),
   })
