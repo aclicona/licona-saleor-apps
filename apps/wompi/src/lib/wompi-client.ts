@@ -34,6 +34,14 @@ export interface CreateTransactionParams {
   }
 }
 
+export interface WompiRefund {
+  id: number | string
+  transaction_id: string
+  status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'ERROR' | string
+  amount_in_cents: number
+  status_message?: string | null
+}
+
 export interface WompiTransaction {
   id: string
   status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'VOIDED' | 'ERROR'
@@ -157,16 +165,37 @@ export class WompiClient {
     })
   }
 
-  async refundTransaction(id: string, amountInCents: number): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/transactions/${id}/refund`, {
+  /**
+   * Crea un reembolso (parcial o total) con `POST /refunds` (B-432).
+   *
+   * El endpoint `POST /transactions/{id}/refund` que se usaba antes NO existe
+   * (404 con cuerpo vacío, verificado contra el sandbox el 2026-10-06). El real
+   * recibe `{transaction_id, amount_in_cents}` y responde 201 con el reembolso
+   * en `PENDING`; pasa a `APPROVED` unos segundos después (`getRefund`).
+   * `/transactions/{id}/void` solo anula por el monto completo.
+   */
+  async refundTransaction(transactionId: string, amountInCents: number): Promise<WompiRefund> {
+    const res = await fetch(`${this.baseUrl}/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.config.privateKey}`,
       },
-      body: JSON.stringify({ amount_in_cents: amountInCents }),
+      body: JSON.stringify({ transaction_id: transactionId, amount_in_cents: amountInCents }),
     })
-    if (!res.ok) throw new Error(`Wompi refund ${res.status}`)
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      throw new Error(`Wompi refund ${res.status}: ${err}`)
+    }
+    return ((await res.json()) as { data: WompiRefund }).data
+  }
+
+  async getRefund(id: string | number): Promise<WompiRefund> {
+    const res = await fetch(`${this.baseUrl}/refunds/${id}`, {
+      headers: { Authorization: `Bearer ${this.config.privateKey}` },
+    })
+    if (!res.ok) throw new Error(`Wompi getRefund ${res.status}`)
+    return ((await res.json()) as { data: WompiRefund }).data
   }
 
   async voidTransaction(id: string): Promise<void> {

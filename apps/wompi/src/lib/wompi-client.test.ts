@@ -149,3 +149,28 @@ describe('WompiClient.listTransactions — consulta para la conciliación (B-412
     await expect(crearClientePrueba().listTransactions(new Date(), new Date())).rejects.toThrow('Wompi listado 503')
   })
 })
+
+describe('WompiClient.refundTransaction / getRefund (B-432)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('hace POST /refunds con transaction_id y amount_in_cents', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ data: { id: 1, status: 'PENDING' } }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const c = new WompiClient({ publicKey: 'p', privateKey: 'prv_test_key', integrityKey: 'i', sandboxMode: true })
+    await c.refundTransaction('tx-1', 300000)
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/v1\/refunds$/)
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ transaction_id: 'tx-1', amount_in_cents: 300000 })
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer prv_test_key')
+  })
+
+  it('getRefund hace GET /refunds/{id}', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ data: { id: 1, status: 'APPROVED' } }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const c = new WompiClient({ publicKey: 'p', privateKey: 'k', integrityKey: 'i', sandboxMode: true })
+    expect((await c.getRefund(30954)).status).toBe('APPROVED')
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/v1\/refunds\/30954$/)
+  })
+})
