@@ -57,11 +57,22 @@ export interface WompiTransaction {
 const MAX_PAGINAS_LISTADO = 20
 const TAM_PAGINA_LISTADO = 100
 
+/**
+ * Timeout por petición a Wompi (B-996). Sin él, un GET colgado deja el candado de la conciliación
+ * (B-412, compartido con el endpoint HTTP) tomado ~300 s (default de undici) y los handlers síncronos
+ * ante Saleor sin responder a tiempo. En `listTransactions` aplica a cada página.
+ */
+export const TIMEOUT_WOMPI_MS = 15_000
+
 export class WompiClient {
   private baseUrl: string
 
   constructor(private config: WompiConfig) {
     this.baseUrl = config.sandboxMode === false ? WOMPI_PROD_URL : WOMPI_SANDBOX_URL
+  }
+
+  private fetchWompi(url: string, init: RequestInit = {}): Promise<Response> {
+    return fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_WOMPI_MS) })
   }
 
   getPublicKey(): string {
@@ -78,7 +89,7 @@ export class WompiClient {
   }
 
   async getAcceptanceToken(): Promise<string> {
-    const res = await fetch(`${this.baseUrl}/merchants/${this.config.publicKey}`)
+    const res = await this.fetchWompi(`${this.baseUrl}/merchants/${this.config.publicKey}`)
     if (!res.ok) throw new Error(`Wompi merchants ${res.status}`)
     const body = (await res.json()) as {
       data: { presigned_acceptance: { acceptance_token: string } }
@@ -87,7 +98,7 @@ export class WompiClient {
   }
 
   async createTransaction(params: CreateTransactionParams): Promise<WompiTransaction> {
-    const res = await fetch(`${this.baseUrl}/transactions`, {
+    const res = await this.fetchWompi(`${this.baseUrl}/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -112,7 +123,7 @@ export class WompiClient {
   }
 
   async getTransaction(id: string): Promise<WompiTransaction> {
-    const res = await fetch(`${this.baseUrl}/transactions/${id}`, {
+    const res = await this.fetchWompi(`${this.baseUrl}/transactions/${id}`, {
       headers: { Authorization: `Bearer ${this.config.privateKey}` },
     })
     if (!res.ok) throw new Error(`Wompi ${res.status}`)
@@ -138,7 +149,7 @@ export class WompiClient {
         page: String(pagina),
         page_size: String(TAM_PAGINA_LISTADO),
       })
-      const res = await fetch(`${this.baseUrl}/transactions?${qs}`, {
+      const res = await this.fetchWompi(`${this.baseUrl}/transactions?${qs}`, {
         headers: { Authorization: `Bearer ${this.config.privateKey}` },
       })
       if (!res.ok) throw new Error(`Wompi listado ${res.status}`)
@@ -175,7 +186,7 @@ export class WompiClient {
    * `/transactions/{id}/void` solo anula por el monto completo.
    */
   async refundTransaction(transactionId: string, amountInCents: number): Promise<WompiRefund> {
-    const res = await fetch(`${this.baseUrl}/refunds`, {
+    const res = await this.fetchWompi(`${this.baseUrl}/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -191,7 +202,7 @@ export class WompiClient {
   }
 
   async getRefund(id: string | number): Promise<WompiRefund> {
-    const res = await fetch(`${this.baseUrl}/refunds/${id}`, {
+    const res = await this.fetchWompi(`${this.baseUrl}/refunds/${id}`, {
       headers: { Authorization: `Bearer ${this.config.privateKey}` },
     })
     if (!res.ok) throw new Error(`Wompi getRefund ${res.status}`)
@@ -199,7 +210,7 @@ export class WompiClient {
   }
 
   async voidTransaction(id: string): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/transactions/${id}/void`, {
+    const res = await this.fetchWompi(`${this.baseUrl}/transactions/${id}/void`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.config.privateKey}` },
     })

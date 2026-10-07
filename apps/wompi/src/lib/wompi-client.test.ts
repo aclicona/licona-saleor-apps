@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { WompiClient } from './wompi-client.js'
+import { WompiClient, TIMEOUT_WOMPI_MS } from './wompi-client.js'
 
 function crearClientePrueba() {
   return new WompiClient({
@@ -172,5 +172,64 @@ describe('WompiClient.refundTransaction / getRefund (B-432)', () => {
     const c = new WompiClient({ publicKey: 'p', privateKey: 'k', integrityKey: 'i', sandboxMode: true })
     expect((await c.getRefund(30954)).status).toBe('APPROVED')
     expect(fetchMock.mock.calls[0][0]).toMatch(/\/v1\/refunds\/30954$/)
+  })
+})
+
+describe('WompiClient — timeout por petición (B-996)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  const respuestaOk = { ok: true, status: 200, json: () => Promise.resolve({ data: [], meta: {} }), text: () => Promise.resolve('') }
+
+  const metodos: Array<[string, (c: WompiClient) => Promise<unknown>]> = [
+    ['getAcceptanceToken', (c) => c.getAcceptanceToken()],
+    ['createTransaction', (c) => c.createTransaction({ amountInCents: 1000, currency: 'COP', customerEmail: 'a@b.co', reference: 'r', redirectUrl: 'https://x.co', acceptanceToken: 't' })],
+    ['getTransaction', (c) => c.getTransaction('tx-1')],
+    ['listTransactions', (c) => c.listTransactions(new Date('2026-10-01'), new Date('2026-10-02'))],
+    ['refundTransaction', (c) => c.refundTransaction('tx-1', 1000)],
+    ['getRefund', (c) => c.getRefund(7)],
+    ['voidTransaction', (c) => c.voidTransaction('tx-1')],
+  ]
+
+  it.each(metodos)('%s pasa un AbortSignal con el timeout de Wompi', async (_nombre, llamar) => {
+    const fetchMock = vi.fn().mockResolvedValue(respuestaOk)
+    vi.stubGlobal('fetch', fetchMock)
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+
+    await llamar(crearClientePrueba()).catch(() => undefined)
+
+    expect(fetchMock).toHaveBeenCalled()
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    expect(timeoutSpy).toHaveBeenCalledWith(TIMEOUT_WOMPI_MS)
+  })
+
+  it.each(metodos)('%s rechaza cuando Wompi no responde y vence el timeout', async (_nombre, llamar) => {
+    const controlador = new AbortController()
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controlador.signal)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+      })),
+    )
+
+    const pendiente = llamar(crearClientePrueba())
+    controlador.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+
+    await expect(pendiente).rejects.toMatchObject({ name: 'TimeoutError' })
+  })
+
+  it('listTransactions aplica el timeout a cada página', async () => {
+    const llena = Array.from({ length: 100 }, (_, i) => ({ id: `t${i}`, created_at: '2026-10-01T12:00:00Z' }))
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ data: llena, meta: { page_size: 100, total_results: 250 } }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+
+    await crearClientePrueba().listTransactions(new Date('2026-10-01'), new Date('2026-10-02'))
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(timeoutSpy).toHaveBeenCalledTimes(3)
   })
 })
