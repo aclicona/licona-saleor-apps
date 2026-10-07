@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   conciliarTransaccionesWompi,
   conciliacionHabilitada,
+  candadoConciliacion,
   crearHandlerConciliacion,
   ventanaDeConciliacion,
   type FuenteTransaccionesWompi,
@@ -222,5 +223,25 @@ describe('crearHandlerConciliacion — protegido por token', () => {
     const mal = reply()
     await crearHandlerConciliacion({ wompi: { listarTransacciones: vi.fn().mockRejectedValue(new Error('x')) }, saleor: saleor() })(req('Bearer secreto'), mal as unknown as FastifyReply)
     expect(mal.status).toHaveBeenCalledWith(502)
+  })
+  it('con la conciliación ya en curso (candado tomado) → 409 y no consulta Wompi', async () => {
+    process.env.WOMPI_CONCILIACION_TOKEN = 'secreto'
+    const f = fuente([txn()])
+    expect(candadoConciliacion.tomar()).toBe(true)
+    try {
+      const r = reply()
+      await crearHandlerConciliacion({ wompi: f, saleor: saleor() })(req('Bearer secreto'), r as unknown as FastifyReply)
+      expect(r.status).toHaveBeenCalledWith(409)
+      expect(r.send).toHaveBeenCalledWith({ error: 'Conciliación en curso' })
+      expect(f.listarTransacciones).not.toHaveBeenCalled()
+    } finally {
+      candadoConciliacion.liberar()
+    }
+  })
+
+  it('libera el candado al terminar, también si la corrida falla', async () => {
+    process.env.WOMPI_CONCILIACION_TOKEN = 'secreto'
+    await crearHandlerConciliacion({ wompi: fuente([txn()]), saleor: saleor({ alreadyProcessed: true }) })(req('Bearer secreto'), reply() as unknown as FastifyReply)
+    expect(candadoConciliacion.tomado()).toBe(false)
   })
 })

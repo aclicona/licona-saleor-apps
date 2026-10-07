@@ -90,6 +90,10 @@ describe('validarConfiguracion — fail-fast de variables obligatorias', () => {
     expect(() => validarConfiguracion(env)).not.toThrow()
   })
 
+  it('declara WOMPI_CONCILIACION_INTERVALO_MINUTOS como opcional (B-412)', () => {
+    expect(VARIABLES_OPCIONALES.map((v) => v.nombre)).toContain('WOMPI_CONCILIACION_INTERVALO_MINUTOS')
+  })
+
   it('las tres listas de variables son disjuntas', () => {
     // Una variable en dos clases a la vez es una contradicción sobre qué pasa
     // si falta: no puede a la vez abortar el arranque y degradarlo.

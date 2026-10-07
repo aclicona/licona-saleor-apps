@@ -131,6 +131,7 @@ export const VARIABLES_OPCIONALES: ReadonlyArray<{ nombre: string; porDefecto: s
   { nombre: 'WOMPI_CONCILIACION_HABILITADA', porDefecto: 'apagado (ruta de conciliación no registrada; ver docs/conciliacion.md, B-412)' },
   { nombre: 'WOMPI_CONCILIACION_TOKEN', porDefecto: 'sin valor: la conciliación no se habilita sin él' },
   { nombre: 'WOMPI_CONCILIACION_VENTANA_MINUTOS', porDefecto: '1440 (24 h)' },
+  { nombre: 'WOMPI_CONCILIACION_INTERVALO_MINUTOS', porDefecto: '15 (temporizador en proceso si la conciliación está habilitada; 0 = apagado; inválido cae a 15 y se avisa; ver lib/conciliacion-periodica.ts, B-412)' },
   { nombre: 'APL', porDefecto: 'env' },
   { nombre: 'LOG_LEVEL', porDefecto: 'info (un valor inválido cae al default y se avisa; ver lib/logging.ts)' },
 ]

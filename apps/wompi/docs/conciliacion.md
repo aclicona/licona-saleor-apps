@@ -17,18 +17,28 @@ Apagado por defecto: la ruta no existe (404).
 
 1. `WOMPI_CONCILIACION_HABILITADA=true` y `WOMPI_CONCILIACION_TOKEN=<secreto largo>` (ambas obligatorias).
 2. Opcional: `WOMPI_CONCILIACION_VENTANA_MINUTOS` (default 1440, máx. 10080).
-3. Disparar con `POST /api/conciliacion/ejecutar` y `Authorization: Bearer <token>`. Responde 200 con el
+3. Opcional: `WOMPI_CONCILIACION_INTERVALO_MINUTOS` (default 15, máx. 1440; `0` apaga el temporizador).
+4. Disparo automático: con la conciliación habilitada, un **temporizador en proceso** (`src/lib/conciliacion-periodica.ts`)
+   corre la primera vez 30 s tras arrancar y luego cada N min (se re-arma al terminar; nunca se solapa).
+   Salta la corrida, con `warn`, si la App no está registrada en Saleor o si ya hay otra conciliación en curso
+   (candado en memoria compartido con el endpoint). Un fallo de una corrida se registra y no tumba el proceso.
+   Cada corrida del temporizador loguea con `disparador: "timer"`; la del endpoint con `disparador: "http"`.
+   Un intervalo mayor que la mitad de la ventana emite `warn` al arrancar.
+5. Disparo manual con `POST /api/conciliacion/ejecutar` y `Authorization: Bearer <token>`. Responde 200 con el
    resumen (`revisadas, yaReportadas, reportadas, sinMapeo, omitidas, errores`), 502 si falló el API de Wompi,
-   401 sin token válido. **No hay cron cableado**: quien la encienda programa el disparo.
+   401 sin token válido, 409 `{ error: 'Conciliación en curso' }` si ya hay una corrida en este proceso.
+
+**Réplicas múltiples:** el candado es por proceso. Con N réplicas habrá N corridas por intervalo; es inocuo
+(Saleor deduplica por `pspReference` + tipo + importe) y se acepta.
 
 ## Decisiones pendientes (Andrés)
 
 | Tema | Opciones | Recomendación |
 |---|---|---|
-| Frecuencia | cada 5 min / 15 min / horaria | cada 15 min: acota la pérdida a minutos con coste bajo (Saleor deduplica) |
+| Frecuencia | cada 5 min / 15 min / horaria | cada 15 min (default de `WOMPI_CONCILIACION_INTERVALO_MINUTOS`): acota la pérdida a minutos con coste bajo (Saleor deduplica) |
 | Ventana | 1 h / 24 h / 7 d | 24 h (default), siempre ≥ 2× la frecuencia y ≥ la caída máxima tolerada de Saleor |
 | Credenciales | llave privada Wompi ya existente / llave de solo lectura (si Wompi la ofrece) + token propio del endpoint | reutilizar la privada; token del endpoint distinto, rotado desde el aprovisionamiento |
-| Disparador | cron externo (Railway cron/GitHub Actions) llamando al endpoint / script | cron externo con el token en su secret store |
+| Disparador | **Decidido** (B-412, Andrés 2026-10-07 + ruling de Fable): temporizador en proceso dentro de app-wompi, sin servicio nuevo; corre solo mientras el servicio está vivo | — |
 
 ## Pendiente de verificación humana
 

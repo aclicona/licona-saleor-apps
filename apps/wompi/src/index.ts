@@ -7,11 +7,23 @@ import { transactionProcessHandler } from './webhooks/transaction-process.js'
 import { transactionChargeHandler } from './webhooks/transaction-charge.js'
 import { transactionRefundHandler } from './webhooks/transaction-refund.js'
 import { transactionCancelHandler } from './webhooks/transaction-cancel.js'
-import { conciliacionHabilitada, crearHandlerConciliacion } from './lib/conciliacion.js'
+import {
+  conciliacionHabilitada,
+  conciliarTransaccionesWompi,
+  crearHandlerConciliacion,
+  ventanaDeConciliacion,
+  type VentanaConsulta,
+} from './lib/conciliacion.js'
+import {
+  RETRASO_INICIAL_MS,
+  intervaloDeConciliacion,
+  programarConciliacionPeriodica,
+  type ProgramadorConciliacion,
+} from './lib/conciliacion-periodica.js'
 import { wompiClient } from './lib/wompi-client.js'
 import { reportTransactionEvent } from './lib/saleor-client.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
-import { mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
+import { appRegistrada, mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
 import { exigirAppRegistrada, manejadorListo, seguimientoDeriva, manejadorRegistro, manejadorSalud } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
 
@@ -112,18 +124,50 @@ app.post('/api/webhooks/wompi-incoming', soloRegistrada, wompiIncomingHandler)
 
 // ─── Conciliación contra el API de Wompi (B-412) — APAGADA por defecto ───────
 // La ruta NO existe (404) salvo WOMPI_CONCILIACION_HABILITADA=true + WOMPI_CONCILIACION_TOKEN.
-// No hay cron cableado: quien la encienda decide quién y cada cuánto la dispara.
+// Si está habilitada, un temporizador en proceso la dispara cada WOMPI_CONCILIACION_INTERVALO_MINUTOS
+// (default 15; 0 = solo el endpoint HTTP). Ver lib/conciliacion-periodica.ts y docs/conciliacion.md.
+let arrancarConciliacionPeriodica: (() => void) | null = null
+let programadorConciliacion: ProgramadorConciliacion | null = null
 if (conciliacionHabilitada()) {
   const cliente = wompiClient()
-  app.post(
-    '/api/conciliacion/ejecutar',
-    soloRegistrada,
-    crearHandlerConciliacion({
-      wompi: { listarTransacciones: (v) => cliente.listTransactions(v.desde, v.hasta) },
-      saleor: { reportar: reportTransactionEvent },
-    }),
-  )
+  const wompi = { listarTransacciones: (v: VentanaConsulta) => cliente.listTransactions(v.desde, v.hasta) }
+  const saleor = { reportar: reportTransactionEvent }
+  app.post('/api/conciliacion/ejecutar', soloRegistrada, crearHandlerConciliacion({ wompi, saleor }))
   app.log.warn('Conciliación Wompi HABILITADA: POST /api/conciliacion/ejecutar disponible con token')
+
+  const { minutos, aviso } = intervaloDeConciliacion()
+  if (aviso) app.log.warn(aviso)
+  if (minutos === 0) {
+    app.log.info('Conciliación periódica APAGADA (WOMPI_CONCILIACION_INTERVALO_MINUTOS=0): solo el endpoint HTTP')
+  } else {
+    const ventana = ventanaDeConciliacion()
+    const ventanaMin = Math.round((ventana.hasta.getTime() - ventana.desde.getTime()) / 60_000)
+    if (minutos > ventanaMin / 2) {
+      app.log.warn(
+        `Conciliación periódica: el intervalo (${minutos} min) supera la mitad de la ventana (${ventanaMin} min); ` +
+          'una corrida fallida dejaría huecos sin cubrir',
+      )
+    }
+    // Los hooks no se pueden añadir con el servidor ya escuchando: se registra aquí y detiene lo que haya.
+    app.addHook('onClose', (_instancia, hecho) => {
+      programadorConciliacion?.detener()
+      hecho()
+    })
+    const logTimer = app.log.child({ webhook: 'conciliacion', disparador: 'timer' })
+    arrancarConciliacionPeriodica = () => {
+      programadorConciliacion = programarConciliacionPeriodica({
+        conciliar: (v) => conciliarTransaccionesWompi({ wompi, saleor, ventana: v, log: logTimer }),
+        ventana: () => ventanaDeConciliacion(),
+        registrada: () => appRegistrada(),
+        intervaloMs: minutos * 60_000,
+        retrasoInicialMs: RETRASO_INICIAL_MS,
+        log: logTimer,
+      })
+      app.log.warn(
+        `Conciliación periódica ACTIVA: cada ${minutos} min, ventana ${ventanaMin} min, primera corrida en ${RETRASO_INICIAL_MS / 1000} s`,
+      )
+    }
+  }
 }
 
 // ─── Start ───────────────────────────────────────────────────────────────────
@@ -140,4 +184,7 @@ app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
     log: app.log,
     seguimiento: seguimientoDeriva,
   })
+
+  // B-412: el temporizador de conciliación arranca con el servidor ya escuchando.
+  arrancarConciliacionPeriodica?.()
 })

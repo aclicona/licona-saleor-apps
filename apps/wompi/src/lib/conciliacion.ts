@@ -170,6 +170,30 @@ export function ventanaDeConciliacion(env: NodeJS.ProcessEnv = process.env, ahor
   return { desde: new Date(ahora.getTime() - minutos * 60_000), hasta: ahora }
 }
 
+// ─── Candado compartido (HTTP + temporizador) ────────────────────────────────
+
+let enCurso = false
+
+/**
+ * Candado booleano en memoria, COMPARTIDO por el handler HTTP y el temporizador
+ * (`conciliacion-periodica.ts`): nunca hay dos conciliaciones a la vez en este proceso. No cubre
+ * réplicas distintas; ahí la idempotencia de Saleor hace inocuo el duplicado.
+ */
+export const candadoConciliacion = {
+  /** `true` si lo tomó; `false` si ya estaba tomado. */
+  tomar(): boolean {
+    if (enCurso) return false
+    enCurso = true
+    return true
+  },
+  liberar(): void {
+    enCurso = false
+  },
+  tomado(): boolean {
+    return enCurso
+  },
+}
+
 // ─── Disparo por HTTP (protegido) ────────────────────────────────────────────
 
 function tokenValido(cabecera: string | undefined, esperado: string): boolean {
@@ -187,11 +211,19 @@ export function crearHandlerConciliacion(deps: { wompi: FuenteTransaccionesWompi
     if (!tokenValido(req.headers.authorization, process.env.WOMPI_CONCILIACION_TOKEN ?? '')) {
       return reply.status(401).send({ error: 'No autorizado' })
     }
-    const resultado = await conciliarTransaccionesWompi({
-      ...deps,
-      ventana: ventanaDeConciliacion(),
-      log: req.log.child({ webhook: 'conciliacion' }),
-    })
+    if (!candadoConciliacion.tomar()) {
+      return reply.status(409).send({ error: 'Conciliación en curso' })
+    }
+    let resultado: ResultadoConciliacion
+    try {
+      resultado = await conciliarTransaccionesWompi({
+        ...deps,
+        ventana: ventanaDeConciliacion(),
+        log: req.log.child({ webhook: 'conciliacion', disparador: 'http' }),
+      })
+    } finally {
+      candadoConciliacion.liberar()
+    }
     return reply.status(resultado.errorApi ? 502 : 200).send(resultado)
   }
 }
