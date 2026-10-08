@@ -65,9 +65,10 @@ es `transaction-*` y solo lee la llave pública, sin red.
 | Sin `pspReference` en el payload | `CANCEL_FAILURE`, `message` fijo («Sin pspReference») |
 | Wompi devuelve 4xx de validación (excepto 408/429) | `CANCEL_FAILURE`, `message` fijo («Wompi rechazó la solicitud de anulación») |
 | Timeout, `fetch failed`, 5xx, 408/429 | sin `result`, `pspReference` = el de la transacción (respuesta asíncrona: deja `CANCEL_REQUEST`, no final) |
+| `CANCEL_REQUEST` que quedó pendiente → lo cierra la conciliación (B-1083) | Wompi `VOIDED` → `CANCEL_SUCCESS`; `APPROVED` pasado el margen (`MARGEN_ANULACION_PENDIENTE_MIN`, 60 min desde el request) → `CANCEL_FAILURE` con `message` fijo («La anulación no se aplicó en Wompi (sigue APPROVED pasado el margen)»); `APPROVED` dentro del margen → se espera; cualquier otro estado → no se decide, `log.error` y revisión humana. Se reporta con el mismo `pspReference` e importe del request |
 
 La anulación pudo aplicarse en Wompi, por eso el estado desconocido no se cierra como fallido. Se concilia
-consultando la transacción en Wompi. El texto del error va solo al log.
+(`docs/conciliacion.md` → «Solicitudes pendientes»). El texto del error va solo al log.
 
 ## Reembolsos: fallo de red ≠ `REFUND_FAILURE` (B-1071)
 
@@ -103,7 +104,5 @@ plazo global `PLAZO_GLOBAL_MS` = 15 000 ms (margen de ~3 s) que **cuenta desde l
 - Plazo ya agotado por la verificación **antes de crear**: no se llama a Wompi (aún no hay nada creado); sin `result` y `pspReference` sin-id.
 - Si tras crear quedan ≤ 1,5 s de plazo, se omiten la espera y el sondeo y se responde no final con el id conocido.
 
-**Pendiente (sin implementar):** nada cierra hoy un `REFUND_REQUEST` pendiente. `wompi-incoming.ts` no maneja
-reembolsos y la conciliación solo lista transacciones; hace falta una tarea que consulte `GET /refunds/{id}` y
-reporte `transactionEventReport` (`REFUND_SUCCESS`/`REFUND_FAILURE`). Hasta entonces un operador debe verificar
-en Wompi antes de reintentar.
+**Pendiente (B-1077):** el motor `conciliarSolicitudesPendientes` ya existe (B-1083); falta la política de reembolsos
+(`getRefund`, psp `:reembolso-sin-id:`). Hasta entonces un operador debe verificar en Wompi antes de reintentar.

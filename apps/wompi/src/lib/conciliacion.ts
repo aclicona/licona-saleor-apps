@@ -5,6 +5,12 @@ import { transactionIdDesdeReferencia } from './referencia.js'
 import { CODIGO_IMPORTE_INCONSISTENTE, CODIGO_TRANSACCION_INEXISTENTE } from './saleor-errors.js'
 import type { SaleorTransactionEventType, TransactionEventReportResult } from './saleor-client.js'
 import { WOMPI_TO_SALEOR } from '../webhooks/wompi-incoming.js'
+import {
+  conciliarSolicitudesPendientes,
+  type LectorSolicitudesSaleor,
+  type PoliticaSolicitud,
+  type ResultadoSolicitudes,
+} from './conciliacion-solicitudes.js'
 
 /**
  * Backstop de conciliación contra el API de Wompi (B-412).
@@ -68,11 +74,21 @@ export interface ResultadoConciliacion {
   errores: number
   /** El listado en Wompi falló: no se revisó nada. */
   errorApi: boolean
+  /** Cierre de anulaciones pendientes (B-1083). Ausente si no está cableado. */
+  anulaciones?: ResultadoSolicitudes
+}
+
+/** Dependencias opcionales del paso que cierra solicitudes pendientes (B-1083). */
+export interface DepsSolicitudes {
+  saleorLector: LectorSolicitudesSaleor
+  politica: PoliticaSolicitud
+  ahora?: Date
 }
 
 export async function conciliarTransaccionesWompi(deps: {
   wompi: FuenteTransaccionesWompi
   saleor: ReportadorSaleor
+  anulaciones?: DepsSolicitudes
   ventana: VentanaConsulta
   log: LogConciliacion
 }): Promise<ResultadoConciliacion> {
@@ -149,6 +165,10 @@ export async function conciliarTransaccionesWompi(deps: {
     }
   }
 
+  if (deps.anulaciones) {
+    r.anulaciones = await conciliarSolicitudesPendientes({ ...deps.anulaciones, saleor, ventana, log })
+  }
+
   log.info({ ...r, desde: ventana.desde, hasta: ventana.hasta }, 'Conciliación terminada')
   return r
 }
@@ -206,7 +226,11 @@ function tokenValido(cabecera: string | undefined, esperado: string): boolean {
  * Handler de `POST /api/conciliacion/ejecutar`. La ruta solo se registra si `conciliacionHabilitada()`;
  * aun así exige `Authorization: Bearer <WOMPI_CONCILIACION_TOKEN>`. Síncrono: devuelve el resumen.
  */
-export function crearHandlerConciliacion(deps: { wompi: FuenteTransaccionesWompi; saleor: ReportadorSaleor }) {
+export function crearHandlerConciliacion(deps: {
+  wompi: FuenteTransaccionesWompi
+  saleor: ReportadorSaleor
+  anulaciones?: DepsSolicitudes
+}) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     if (!tokenValido(req.headers.authorization, process.env.WOMPI_CONCILIACION_TOKEN ?? '')) {
       return reply.status(401).send({ error: 'No autorizado' })

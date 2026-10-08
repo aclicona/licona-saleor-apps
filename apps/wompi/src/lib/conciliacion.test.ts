@@ -10,6 +10,7 @@ import {
   type ReportadorSaleor,
   type TransaccionConciliable,
 } from './conciliacion.js'
+import { politicaAnulaciones } from './conciliacion-solicitudes.js'
 
 // Referencia con forma de ID global de Saleor (misma que usa wompi-incoming.test.ts).
 const REF = 'VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzLTgwYzA3NmExNzUzYg=='
@@ -243,5 +244,42 @@ describe('crearHandlerConciliacion — protegido por token', () => {
     process.env.WOMPI_CONCILIACION_TOKEN = 'secreto'
     await crearHandlerConciliacion({ wompi: fuente([txn()]), saleor: saleor({ alreadyProcessed: true }) })(req('Bearer secreto'), reply() as unknown as FastifyReply)
     expect(candadoConciliacion.tomado()).toBe(false)
+  })
+})
+
+describe('conciliarTransaccionesWompi — paso de anulaciones (B-1083)', () => {
+  const CLAVES_DE_SIEMPRE = ['revisadas', 'yaReportadas', 'reportadas', 'sinMapeo', 'omitidas', 'errores', 'errorApi', 'desde', 'hasta']
+
+  function anulacionesCableadas() {
+    return {
+      saleorLector: { listarTransaccionesConSolicitud: vi.fn().mockResolvedValue([]) },
+      politica: politicaAnulaciones({ getTransaction: vi.fn() }),
+    }
+  }
+
+  it('cableado: «Conciliación terminada» lleva las claves de siempre más anulaciones; sin cablear no aparece', async () => {
+    const conLog = crearLog()
+    await conciliarTransaccionesWompi({
+      wompi: fuente([]), saleor: saleor(), ventana: VENTANA, log: conLog, anulaciones: anulacionesCableadas(),
+    })
+    const [campos, mensaje] = conLog.info.mock.calls.at(-1)!
+    expect(mensaje).toBe('Conciliación terminada')
+    expect(Object.keys(campos).sort()).toEqual([...CLAVES_DE_SIEMPRE, 'anulaciones'].sort())
+    expect(campos.anulaciones).toMatchObject({ candidatas: 0, errorApi: false })
+
+    const sinLog = crearLog()
+    await conciliarTransaccionesWompi({ wompi: fuente([]), saleor: saleor(), ventana: VENTANA, log: sinLog })
+    expect(Object.keys(sinLog.info.mock.calls.at(-1)![0]).sort()).toEqual([...CLAVES_DE_SIEMPRE].sort())
+  })
+
+  it('corre aunque una transacción del primer bucle haya fallado', async () => {
+    const s: ReportadorSaleor = { reportar: vi.fn().mockRejectedValue(new Error('Saleor caído')) }
+    const anulaciones = anulacionesCableadas()
+    const r = await conciliarTransaccionesWompi({
+      wompi: fuente([txn()]), saleor: s, ventana: VENTANA, log: crearLog(), anulaciones,
+    })
+    expect(r.errores).toBe(1)
+    expect(anulaciones.saleorLector.listarTransaccionesConSolicitud).toHaveBeenCalledTimes(1)
+    expect(r.anulaciones).toBeDefined()
   })
 })

@@ -77,6 +77,17 @@ interface TransactionEventReportResponse {
  */
 const TIMEOUT_SALEOR_MS = 10_000
 
+/** Cliente GraphQL de Saleor con el token de la App. Lanza si falta la configuración. */
+function crearClienteSaleor(): GraphQLClient {
+  const apiUrl = process.env.SALEOR_API_URL
+  const token = process.env.SALEOR_APP_TOKEN
+  if (!apiUrl || !token) throw new Error('SALEOR_API_URL o SALEOR_APP_TOKEN no están configuradas')
+
+  return new GraphQLClient(apiUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+}
+
 /**
  * Reporta un evento de transacción a Saleor.
  *
@@ -93,13 +104,7 @@ export async function reportTransactionEvent(params: {
   pspReference: string
   message?: string
 }): Promise<TransactionEventReportResult> {
-  const apiUrl = process.env.SALEOR_API_URL
-  const token = process.env.SALEOR_APP_TOKEN
-  if (!apiUrl || !token) throw new Error('SALEOR_API_URL o SALEOR_APP_TOKEN no están configuradas')
-
-  const client = new GraphQLClient(apiUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+  const client = crearClienteSaleor()
 
   const data = await client.request<TransactionEventReportResponse>({
     document: TRANSACTION_EVENT_REPORT,
@@ -121,4 +126,103 @@ export async function reportTransactionEvent(params: {
     transactionId: payload?.transaction?.id ?? null,
     errors: payload?.errors ?? [],
   }
+}
+
+// ─── Solicitudes pendientes (B-1083) ─────────────────────────────────────────
+
+export type TipoSolicitud = 'CANCEL_REQUEST' | 'REFUND_REQUEST'
+
+export interface EventoTransaccionSaleor {
+  type: string
+  pspReference: string | null
+  createdAt: string
+  amount: number
+}
+
+export interface TransaccionConSolicitudes {
+  id: string
+  cancelPendingAmount: number
+  refundPendingAmount: number
+  events: EventoTransaccionSaleor[]
+}
+
+/** Tamaño de página y tope de páginas: acotan el trabajo de una corrida de conciliación. */
+const TAM_PAGINA_SOLICITUDES = 50
+export const MAX_PAGINAS_SOLICITUDES = 5
+
+const TRANSACCIONES_CON_SOLICITUD = gql`
+  query TransaccionesConSolicitud($tipo: TransactionEventTypeEnum!, $desde: DateTime!, $after: String) {
+    transactions(
+      first: ${TAM_PAGINA_SOLICITUDES}
+      after: $after
+      where: { events: [{ type: { eq: $tipo }, createdAt: { gte: $desde } }] }
+      sortBy: { field: CREATED_AT, direction: DESC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          id
+          cancelPendingAmount { amount }
+          refundPendingAmount { amount }
+          events { type pspReference createdAt amount { amount } }
+        }
+      }
+    }
+  }
+`
+
+interface TransaccionesConSolicitudResponse {
+  transactions: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    edges: Array<{
+      node: {
+        id: string
+        cancelPendingAmount: { amount: number }
+        refundPendingAmount: { amount: number }
+        events: Array<{ type: string; pspReference: string | null; createdAt: string; amount: { amount: number } }>
+      }
+    }>
+  } | null
+}
+
+/**
+ * Transacciones de esta App que tienen un evento `tipo` (CANCEL_REQUEST / REFUND_REQUEST) creado desde
+ * `desde`. El filtro `events` exige Saleor ≥ 3.23. NO filtra por pendiente > 0: eso lo hace el llamador.
+ * Pagina hasta `MAX_PAGINAS_SOLICITUDES`; lanza si falla el transporte.
+ */
+export async function listarTransaccionesConSolicitud(params: {
+  tipo: TipoSolicitud
+  desde: Date
+  /** Se invoca si quedaban más páginas al llegar al tope (hay solicitudes sin revisar). */
+  alLlegarAlTope?: () => void
+}): Promise<TransaccionConSolicitudes[]> {
+  const client = crearClienteSaleor()
+  const resultado: TransaccionConSolicitudes[] = []
+  let after: string | null = null
+
+  for (let pagina = 1; pagina <= MAX_PAGINAS_SOLICITUDES; pagina++) {
+    const data: TransaccionesConSolicitudResponse = await client.request<TransaccionesConSolicitudResponse>({
+      document: TRANSACCIONES_CON_SOLICITUD,
+      variables: { tipo: params.tipo, desde: params.desde.toISOString(), after },
+      signal: AbortSignal.timeout(TIMEOUT_SALEOR_MS),
+    })
+    const conexion = data?.transactions
+    for (const { node } of conexion?.edges ?? []) {
+      resultado.push({
+        id: node.id,
+        cancelPendingAmount: Number(node.cancelPendingAmount.amount),
+        refundPendingAmount: Number(node.refundPendingAmount.amount),
+        events: node.events.map((e) => ({
+          type: e.type,
+          pspReference: e.pspReference,
+          createdAt: e.createdAt,
+          amount: Number(e.amount.amount),
+        })),
+      })
+    }
+    if (!conexion?.pageInfo.hasNextPage) break
+    if (pagina === MAX_PAGINAS_SOLICITUDES) params.alLlegarAlTope?.()
+    after = conexion.pageInfo.endCursor
+  }
+  return resultado
 }

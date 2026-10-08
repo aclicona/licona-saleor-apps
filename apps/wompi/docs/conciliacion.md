@@ -31,6 +31,25 @@ Apagado por defecto: la ruta no existe (404).
 **Réplicas múltiples:** el candado es por proceso. Con N réplicas habrá N corridas por intervalo; es inocuo
 (Saleor deduplica por `pspReference` + tipo + importe) y se acepta.
 
+## Solicitudes pendientes (B-1083)
+
+Tras el bucle de transacciones, la misma corrida cierra las **anulaciones que quedaron pendientes** en Saleor
+(`transaction-cancel` respondió sin `result` por un fallo de red y dejó el `CANCEL_REQUEST` abierto).
+
+- **Qué hace:** consulta a Saleor las transacciones con un `CANCEL_REQUEST` creado dentro de la ventana y
+  `cancelPendingAmount > 0`; por cada request sin cierre pregunta a Wompi (`GET /transactions/{psp}`) y reporta
+  `CANCEL_SUCCESS` (`VOIDED`) o `CANCEL_FAILURE` (`APPROVED` pasado el margen). Reglas en `wompi-estados.md`.
+  Reporta con el `pspReference` y el importe del request (no los de Wompi); si difieren, `warn`.
+- **Por qué se consulta Saleor y no el listado de Wompi:** la fecha del request no es la de la transacción; una
+  venta de hace días puede anularse hoy y el listado por fecha de creación no la vería.
+- **Resumen:** clave opcional `anulaciones` en el resultado y en el log «Conciliación terminada», con
+  `candidatas, cerradasExito, cerradasFallo, yaCerradas, enEspera, sinDecidir, errores, errorApi`. Un fallo de
+  Saleor aquí (`anulaciones.errorApi`) no cambia el código HTTP.
+- **Requisitos:** Saleor ≥ 3.23 (filtro `events` de `transactions`); basta el permiso `HANDLE_PAYMENTS` (la App ve
+  solo sus transacciones).
+- **Límites:** un request más viejo que la ventana no se ve; se leen como máximo 5 páginas de 50 (hay `warn` al
+  llegar al tope). Idempotente: al cerrarse deja de ser candidata y un duplicado da `alreadyProcessed`.
+
 ## Decisiones pendientes (Andrés)
 
 | Tema | Opciones | Recomendación |
@@ -39,6 +58,8 @@ Apagado por defecto: la ruta no existe (404).
 | Ventana | 1 h / 24 h / 7 d | 24 h (default), siempre ≥ 2× la frecuencia y ≥ la caída máxima tolerada de Saleor |
 | Credenciales | llave privada Wompi ya existente / llave de solo lectura (si Wompi la ofrece) + token propio del endpoint | reutilizar la privada; token del endpoint distinto, rotado desde el aprovisionamiento |
 | Disparador | **Decidido** (B-412, Andrés 2026-10-07 + ruling de Fable): temporizador en proceso dentro de app-wompi, sin servicio nuevo; corre solo mientras el servicio está vivo | — |
+| Margen de anulaciones pendientes (B-1083) | 15 / 60 / 240 min | hoy 60 (`MARGEN_ANULACION_PENDIENTE_MIN`). Seguro: un `VOIDED` tardío tras un `CANCEL_FAILURE` sigue des-pagando con `CHARGE_FAILURE` |
+| `availableActions` tras `CANCEL_FAILURE` | `[]` / `['REFUND']` | hoy `[]`: deja Refund apagado. ¿`['REFUND']`? |
 
 ## Pendiente de verificación humana
 
