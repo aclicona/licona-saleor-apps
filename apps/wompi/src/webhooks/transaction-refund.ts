@@ -27,6 +27,10 @@ export const PLAZO_GLOBAL_MS = 15_000
 const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de reembolso'
 
 export async function transactionRefundHandler(req: FastifyRequest, reply: FastifyReply) {
+  // El plazo global cuenta desde la llegada de la petición: Saleor ya está contando sus 18 s, y la
+  // descarga del JWKS al verificar la firma (timeout de jose: 5 s) también consume ese margen.
+  const inicio = Date.now()
+  const restanteMs = () => PLAZO_GLOBAL_MS - (Date.now() - inicio)
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
   // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
   // de verificar la firma para que también quede constancia de lo que se rechaza.
@@ -53,11 +57,17 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
   // reembolso YA existe y ese id es el pspReference de la respuesta no final.
   let refundId: string | undefined
   // Una sola señal para todas las llamadas a Wompi: cada una usa, de hecho, el tiempo restante.
-  const inicio = Date.now()
-  const restanteMs = () => PLAZO_GLOBAL_MS - (Date.now() - inicio)
+  // Se crea tras verificar la firma (los return tempranos de arriba no dejan temporizador); el
+  // `finally` de abajo lo limpia en todos los caminos posteriores.
   const plazo = new AbortController()
-  const temporizador = setTimeout(() => plazo.abort(new Error('Plazo global del reembolso agotado')), PLAZO_GLOBAL_MS)
+  const temporizador = setTimeout(
+    () => plazo.abort(new Error('Plazo global del reembolso agotado')),
+    Math.max(0, restanteMs()),
+  )
   try {
+    // Si la verificación ya consumió todo el plazo NO se llama a Wompi: antes de crear no hay nada creado,
+    // y se responde por el camino no final de B-1071 (sin `result`, referencia sin-id), nunca REFUND_FAILURE.
+    if (restanteMs() <= 0) throw new Error('Plazo global agotado antes de crear el reembolso')
     const cliente = wompiClient()
     let refund = await cliente.refundTransaction(transaction.pspReference, copToCents(action.amount), plazo.signal)
     // Una respuesta sin `id` es id desconocido, no la cadena "undefined".
@@ -115,7 +125,9 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // exige una y sin ella Saleor registraría un REFUND_FAILURE. No se reutiliza
     // la de la transacción: Saleor guarda un solo `request` por pspReference, así
     // que dos reembolsos pendientes con la misma referencia contarían como uno.
-    log.error(
+    // Un aborto por plazo es esperable y ya está contemplado: warn; cualquier otro fallo, error.
+    const nivel = plazo.signal.aborted ? 'warn' : 'error'
+    log[nivel](
       { err: error, refundId, amount: action.amount },
       'Estado del reembolso en Wompi desconocido; se responde sin resultado final (REFUND_REQUEST) para no cerrarlo como fallido',
     )

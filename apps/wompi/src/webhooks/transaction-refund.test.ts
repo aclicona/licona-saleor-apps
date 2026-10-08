@@ -8,6 +8,7 @@ vi.mock('@licona/webhook-utils', async (importOriginal) => ({
 vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
 
 import { wompiClient } from '../lib/wompi-client.js'
+import { verifySaleorWebhook } from '@licona/webhook-utils'
 import { transactionRefundHandler, PLAZO_GLOBAL_MS } from './transaction-refund.js'
 import { WompiHttpError } from '../lib/wompi-error.js'
 
@@ -235,5 +236,29 @@ describe('transactionRefundHandler — plazo global bajo los 18 s de Saleor (B-1
     refundTransaction.mockRejectedValue(new WompiHttpError('Wompi refund 422', 422))
     const { payload } = await correr()
     expect(payload).toMatchObject({ result: 'REFUND_FAILURE', amount: 3000 })
+  })
+  it('la verificación de firma tarda 4 s -> el plazo cubre también esa espera (restan 11 s) y responde antes de 15 s', async () => {
+    vi.mocked(verifySaleorWebhook).mockImplementationOnce(() => new Promise((res) => setTimeout(res, 4000)) as never)
+    refundTransaction.mockImplementation(colgada)
+    const inicio = Date.now()
+    const { payload } = await correr()
+    expect(Date.now() - inicio).toBe(PLAZO_GLOBAL_MS)
+    expect(payload).not.toHaveProperty('result')
+    expect(payload.pspReference).toMatch(PREFIJO_SIN_ID)
+  })
+  it('la verificación consume todo el plazo -> no se llama a Wompi y responde no final sin-id', async () => {
+    vi.mocked(verifySaleorWebhook).mockImplementationOnce(
+      () => new Promise((res) => setTimeout(res, PLAZO_GLOBAL_MS + 500)) as never,
+    )
+    const { payload } = await correr()
+    expect(refundTransaction).not.toHaveBeenCalled()
+    expect(payload).not.toHaveProperty('result')
+    expect(payload.pspReference).toMatch(PREFIJO_SIN_ID)
+  })
+  it('un aborto por plazo se registra como warn, no como error', async () => {
+    refundTransaction.mockImplementation(colgada)
+    const { log } = await correr()
+    expect(log.error).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ amount: 3000 }), expect.any(String))
   })
 })

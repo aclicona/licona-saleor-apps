@@ -233,3 +233,31 @@ describe('WompiClient — timeout por petición (B-996)', () => {
     expect(timeoutSpy).toHaveBeenCalledTimes(3)
   })
 })
+
+describe('WompiClient — señal de plazo externa (B-1078)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** fetch que solo termina cuando la señal recibida se aborta, como uno colgado. */
+  function fetchColgado() {
+    return vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise((_res, rej) => init.signal!.addEventListener('abort', () => rej(init.signal!.reason))),
+    )
+  }
+
+  it.each([
+    ['refundTransaction', (c: WompiClient, s: AbortSignal) => c.refundTransaction('tx', 100, s)],
+    ['getRefund', (c: WompiClient, s: AbortSignal) => c.getRefund(1, s)],
+  ])('%s: abortar el plazo externo aborta el fetch y rechaza con su reason', async (_n, llamar) => {
+    const fetchMock = fetchColgado()
+    vi.stubGlobal('fetch', fetchMock)
+    const externo = new AbortController()
+    const promesa = llamar(crearClientePrueba(), externo.signal)
+    const razon = new Error('plazo agotado')
+    externo.abort(razon)
+    await expect(promesa).rejects.toBe(razon)
+    expect(fetchMock.mock.calls[0][1].signal!.aborted).toBe(true)
+  })
+})
