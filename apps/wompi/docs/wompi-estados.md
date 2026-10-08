@@ -11,6 +11,16 @@ Fuente: https://docs.wompi.co/en/docs/colombia/ (estados de transacción). Mapeo
 | `DECLINED` | Rechazado por el medio de pago | `CHARGE_FAILURE` | `CHARGE_FAILURE` |
 | `ERROR` | Error al procesar | `CHARGE_FAILURE` | `CHARGE_FAILURE` |
 | `VOIDED` | Anulada tras aprobarse | `CHARGE_FAILURE` | `CHARGE_FAILURE` |
+| *(la consulta falla: timeout, red, 5xx)* | Estado desconocido | — | `CHARGE_ACTION_REQUIRED` con `pspReference` (B-1057) |
+
+## Por qué un fallo al consultar no es `CHARGE_FAILURE` (B-1057)
+
+`CHARGE_FAILURE` es un evento **final** en Saleor: tras él, `transactionProcess` ya no vuelve a llamar a la
+App. Si `getTransaction` lanza, el estado en Wompi es desconocido, no un rechazo; responder fallo dejaría la
+transacción marcada como fallida aunque Wompi terminara aprobando. Se responde `CHARGE_ACTION_REQUIRED`
+(como `PENDING`) y lo resuelven el siguiente `transactionProcess`, el webhook entrante o la conciliación
+(`docs/conciliacion.md`). El texto del error va solo al log, nunca en el `message` hacia Saleor.
+`CHARGE_FAILURE` se reserva para el payload sin `pspReference` (no hay nada que consultar).
 
 ## Por qué `VOIDED → CHARGE_FAILURE` (B-411)
 
