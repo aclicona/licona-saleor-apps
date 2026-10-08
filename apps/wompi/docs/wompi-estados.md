@@ -52,8 +52,8 @@ quitar la entrada de `EXCEPCIONES`):
 | Handler | Reporte | Violación |
 |---|---|---|
 | `transaction-initialize` | B-1060 | `createTransaction` lanza → `CHARGE_FAILURE` sin `pspReference` y con `error.message` |
-| `transaction-refund` | PENDIENTE | catch → `REFUND_FAILURE` con `String(error)` en `message`; también si el reembolso ya existe en Wompi (falla `getRefund`) |
-| `transaction-cancel` | PENDIENTE | catch → `CANCEL_FAILURE` con `String(error)` en `message` ante un fallo de red al anular |
+| `transaction-refund` | B-1071 | catch → `REFUND_FAILURE` con `String(error)` en `message`; también si el reembolso ya existe en Wompi (falla `getRefund`) |
+| `transaction-cancel` | B-1072 | catch → `CANCEL_FAILURE` con `String(error)` en `message` ante un fallo de red al anular |
 
 Cumplen: `transaction-process` (B-1057) y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
 es `transaction-*` y solo lee la llave pública, sin red.

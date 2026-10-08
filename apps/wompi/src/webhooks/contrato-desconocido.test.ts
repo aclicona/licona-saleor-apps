@@ -85,11 +85,11 @@ const EXCEPCIONES: Record<string, { reporte: string; motivo: string }> = {
     motivo: 'createTransaction lanza (timeout tras crear en Wompi) -> CHARGE_FAILURE sin pspReference y con error.message en message',
   },
   'transaction-refund': {
-    reporte: 'PENDIENTE',
+    reporte: 'B-1071',
     motivo: 'catch responde REFUND_FAILURE con String(error) en message, también si el reembolso ya existe en Wompi (fallo del sondeo)',
   },
   'transaction-cancel': {
-    reporte: 'PENDIENTE',
+    reporte: 'B-1072',
     motivo: 'catch responde CANCEL_FAILURE con String(error) en message ante un fallo de red al anular',
   },
 }
@@ -158,7 +158,7 @@ describe('contrato «estado desconocido ≠ rechazo» (B-1061)', () => {
   it('toda excepción corresponde a un handler de la tabla y lleva reporte', () => {
     for (const [nombre, ex] of Object.entries(EXCEPCIONES)) {
       expect(TABLA, nombre).toHaveProperty(nombre)
-      expect(ex.reporte, nombre).toMatch(/^(B-\d+|PENDIENTE)$/)
+      expect(ex.reporte, nombre).toMatch(/^(B-\d+)$/)
     }
   })
 
