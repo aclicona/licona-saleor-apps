@@ -33,3 +33,27 @@ Lo fija el test «secuencia APPROVED → VOIDED» en `src/webhooks/wompi-incomin
 
 > Pendiente de verificación humana: que Saleor (fork) revierta efectivamente el cobro con esa secuencia
 > requiere un Saleor vivo; aquí solo se prueba el contrato del reporte (tipo + pspReference).
+
+## Contrato transversal: «estado desconocido ≠ rechazo» (B-1061)
+
+Ningún handler síncrono `transaction-*` puede convertir un fallo de transporte hacia Wompi (`AbortError`,
+`TimeoutError`, `TypeError: fetch failed`, 5xx) en un resultado **final** de fallo (`*_FAILURE`) cuando la
+transacción o el reembolso pudo haberse creado ya en Wompi: el estado es desconocido, no un rechazo, y Saleor
+no vuelve a preguntar tras un evento final. Además, el `message` hacia Saleor **nunca** contiene el texto del
+error (va solo al log). Un 4xx de Wompi sí es un rechazo cierto y sigue siendo `*_FAILURE`.
+
+Lo vigila `src/webhooks/contrato-desconocido.test.ts`: una tabla handler × llamada que falla × tipo de fallo, y
+una aserción que enumera los `transaction-*.ts` del directorio y falla si falta alguno en la tabla (al añadir un
+handler hay que darlo de alta ahí).
+
+Excepciones conocidas (el test exige que la violación **siga** ocurriendo; al arreglarla se pone rojo y hay que
+quitar la entrada de `EXCEPCIONES`):
+
+| Handler | Reporte | Violación |
+|---|---|---|
+| `transaction-initialize` | B-1060 | `createTransaction` lanza → `CHARGE_FAILURE` sin `pspReference` y con `error.message` |
+| `transaction-refund` | PENDIENTE | catch → `REFUND_FAILURE` con `String(error)` en `message`; también si el reembolso ya existe en Wompi (falla `getRefund`) |
+| `transaction-cancel` | PENDIENTE | catch → `CANCEL_FAILURE` con `String(error)` en `message` ante un fallo de red al anular |
+
+Cumplen: `transaction-process` (B-1057) y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
+es `transaction-*` y solo lee la llave pública, sin red.
