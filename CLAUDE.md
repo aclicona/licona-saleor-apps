@@ -71,6 +71,11 @@ producción no llevan tests). `tsconfig.json` sí los incluye: `pnpm typecheck` 
 `pnpm -r build` (`webhook-utils` debe compilarse antes que las Apps), `pnpm typecheck` y `pnpm test`.
 Node sale de `.nvmrc` y pnpm de `packageManager`. No despliega. Para reproducirlo en local, ejecutar
 esos cuatro comandos en ese orden.
+**Tests en un worktree limpio (B-1073):** `apps/wompi/vitest.config.ts` y `apps/envios/vitest.config.ts`
+resuelven `@licona/webhook-utils` desde `packages/webhook-utils/src` (alias), no desde su `dist`, así que
+los tests nunca dependen de un build previo ni del dist de otro checkout. Basta `pnpm install
+--frozen-lockfile` y `pnpm --filter @licona/app-wompi test`. `pnpm typecheck` y `build` sí siguen
+necesitando `pnpm -r build` (los tipos salen de `dist`).
 **Logging en `apps/envios`:** el handler de envíos usa el mismo patrón que los de wompi: `req.log.child`
 con `webhook` y las claves canónicas de correlación (`checkoutId`, en `lib/correlacion.ts`), y los
 fallos de firma se escriben como `log.warn({ motivo: err.reason }, err.message)` — no con `msg` dentro
