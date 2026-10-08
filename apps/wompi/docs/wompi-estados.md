@@ -65,7 +65,7 @@ es `transaction-*` y solo lee la llave pública, sin red.
 |---|---|
 | Wompi devuelve 4xx de validación al crear (excepto 408/429) | `REFUND_FAILURE`, `message` fijo («Wompi rechazó la solicitud de reembolso») |
 | Reembolso `DECLINED`/`ERROR`/`VOIDED` | `REFUND_FAILURE` con `status_message` de Wompi |
-| Timeout, `fetch failed`, 5xx, 408/429 al crear | sin `result`, `pspReference` = el de la transacción |
+| Timeout, `fetch failed`, 5xx, 408/429 al crear, o Wompi responde sin `id` | sin `result`, `pspReference` = `<pspReference de la transacción>:reembolso-sin-id:<uuid>` (único por petición) |
 | Cualquier fallo al sondear `getRefund` tras crear | sin `result`, `pspReference` = id del reembolso |
 | `PENDING` tras el sondeo | sin `result`, `pspReference` = id del reembolso |
 
@@ -73,7 +73,10 @@ Saleor (`saleor/webhook/response_schemas/transaction.py`, `payment/utils.py::_va
 no admite `REFUND_REQUEST` como `result` síncrono: los valores válidos son `REFUND_SUCCESS` y `REFUND_FAILURE`;
 un `result` ausente + `pspReference` (obligatorio) se trata como respuesta asíncrona y deja el evento
 `REFUND_REQUEST`, no final. Sin `pspReference` Saleor registraría un `REFUND_FAILURE`, por eso el timeout en la
-creación (sin id de reembolso) usa el de la transacción. El texto del error va solo al log.
+creación (sin id de reembolso) usa una referencia única por petición. No se reutiliza la de la transacción: Saleor
+guarda un único `request` por `pspReference` (`transaction_item_calculations.py`), así que dos reembolsos pendientes
+con la misma referencia contarían como uno y `charged_value` quedaría mal. Ese caso **solo se concilia buscando en
+Wompi los reembolsos de la transacción**: la referencia generada no casa con ningún id real. El texto del error va solo al log.
 
 **Pendiente (sin implementar):** nada cierra hoy un `REFUND_REQUEST` pendiente. `wompi-incoming.ts` no maneja
 reembolsos y la conciliación solo lista transacciones; hace falta una tarea que consulte `GET /refunds/{id}` y

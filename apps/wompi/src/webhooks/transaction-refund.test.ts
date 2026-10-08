@@ -38,6 +38,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+const PREFIJO_SIN_ID = /^12084641-1791286722-99200:reembolso-sin-id:[0-9a-f-]{36}$/
+
 describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => {
   it('crea el reembolso con el id de Wompi y el importe en centavos', async () => {
     refundTransaction.mockResolvedValue(refund('APPROVED'))
@@ -82,12 +84,39 @@ describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => 
     ['fetch failed', new TypeError('fetch failed secreto-interno')],
     ['5xx', new WompiHttpError('Wompi refund 503: secreto-interno', 503)],
     ['429', new WompiHttpError('Wompi refund 429: secreto-interno', 429)],
-  ])('%s al crear -> no final: solo pspReference de la transacción, sin filtrar el error', async (_n, error) => {
+    ['408', new WompiHttpError('Wompi refund 408: secreto-interno', 408)],
+  ])('%s al crear -> no final: solo pspReference único sin id, sin filtrar el error', async (_n, error) => {
     refundTransaction.mockRejectedValue(error)
     const { payload, log } = await correr()
-    expect(payload).toEqual({ pspReference: '12084641-1791286722-99200' })
+    expect(Object.keys(payload)).toEqual(['pspReference'])
+    expect(payload.pspReference).toMatch(PREFIJO_SIN_ID)
     expect(JSON.stringify(payload)).not.toContain('secreto-interno')
     expect(log.error).toHaveBeenCalled()
+  })
+  it.each([401, 404])('%i al crear -> REFUND_FAILURE', async (status) => {
+    refundTransaction.mockRejectedValue(new WompiHttpError(`Wompi refund ${status}: secreto-interno`, status))
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ result: 'REFUND_FAILURE', amount: 3000 })
+    expect(JSON.stringify(payload)).not.toContain('secreto-interno')
+  })
+  it('dos fallos sin id seguidos dan referencias distintas con el prefijo', async () => {
+    refundTransaction.mockRejectedValue(new TypeError('fetch failed'))
+    const a = (await correr()).payload.pspReference
+    const b = (await correr()).payload.pspReference
+    expect(a).toMatch(PREFIJO_SIN_ID)
+    expect(b).toMatch(PREFIJO_SIN_ID)
+    expect(a).not.toBe(b)
+  })
+  it('Wompi responde sin id al crear -> referencia única, no "undefined"', async () => {
+    refundTransaction.mockResolvedValue({ transaction_id: 'x', status: 'PENDING', amount_in_cents: 300000 })
+    const { payload } = await correr()
+    expect(payload.pspReference).toMatch(PREFIJO_SIN_ID)
+    expect(getRefund).not.toHaveBeenCalled()
+  })
+  it('el log de error lleva el importe', async () => {
+    refundTransaction.mockRejectedValue(new TypeError('fetch failed'))
+    const { log } = await correr()
+    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ amount: 3000 }), expect.any(String))
   })
   it.each([
     ['AbortError', Object.assign(new Error('secreto-interno'), { name: 'AbortError' })],

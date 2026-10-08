@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
@@ -46,8 +47,10 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
   try {
     const cliente = wompiClient()
     let refund = await cliente.refundTransaction(transaction.pspReference, copToCents(action.amount))
-    refundId = String(refund.id)
+    // Una respuesta sin `id` es id desconocido, no la cadena "undefined".
+    if (refund.id != null) refundId = String(refund.id)
     log.info({ refundId: refund.id, estadoRefund: refund.status }, 'Reembolso creado en Wompi')
+    if (refundId === undefined) throw new Error('Wompi creó el reembolso sin devolver id')
 
     // Wompi crea el reembolso en PENDING y lo aprueba unos segundos después.
     // Se sondea dentro del presupuesto del webhook síncrono de Saleor (18 s de
@@ -81,7 +84,7 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // Rechazo cierto: un 4xx de validación al CREAR el reembolso (aún sin id).
     // Es la única vía hacia REFUND_FAILURE desde el catch.
     if (!refundId && esRechazoDefinitivo(error)) {
-      log.error({ err: error, status: error.status }, 'Wompi rechazó crear el reembolso')
+      log.error({ err: error, status: error.status, amount: action.amount }, 'Wompi rechazó crear el reembolso')
       return reply.send({ result: 'REFUND_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO })
     }
     // B-1071: REFUND_FAILURE es final en Saleor. Un timeout, un fallo de red, un
@@ -90,12 +93,14 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // reintentarlo y reembolsar dos veces. Saleor no tiene `result` no final en
     // la respuesta síncrona; omitirlo + `pspReference` = respuesta asíncrona, que
     // deja el evento REFUND_REQUEST. Sin id de reembolso (timeout en la propia
-    // creación) se usa el pspReference de la transacción: el esquema asíncrono
-    // exige uno y sin él Saleor registraría un REFUND_FAILURE.
+    // creación) se genera una referencia ÚNICA por petición: el esquema asíncrono
+    // exige una y sin ella Saleor registraría un REFUND_FAILURE. No se reutiliza
+    // la de la transacción: Saleor guarda un solo `request` por pspReference, así
+    // que dos reembolsos pendientes con la misma referencia contarían como uno.
     log.error(
-      { err: error, refundId },
+      { err: error, refundId, amount: action.amount },
       'Estado del reembolso en Wompi desconocido; se responde sin resultado final (REFUND_REQUEST) para no cerrarlo como fallido',
     )
-    return reply.send({ pspReference: refundId ?? transaction.pspReference })
+    return reply.send({ pspReference: refundId ?? `${transaction.pspReference}:reembolso-sin-id:${randomUUID()}` })
   }
 }
