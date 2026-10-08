@@ -78,6 +78,18 @@ guarda un único `request` por `pspReference` (`transaction_item_calculations.py
 con la misma referencia contarían como uno y `charged_value` quedaría mal. Ese caso **solo se concilia buscando en
 Wompi los reembolsos de la transacción**: la referencia generada no casa con ningún id real. El texto del error va solo al log.
 
+### Plazo global de 15 s (B-1078)
+
+Saleor espera 18 s la respuesta síncrona del webhook y, pasado ese tiempo, registra `REFUND_FAILURE`
+(«Failed to delivery request.») aunque el reembolso ya exista en Wompi. Cada llamada a Wompi tiene su propio timeout
+de 15 s (`TIMEOUT_WOMPI_MS`), así que crear + esperar + sondear podía sumar más de 18 s. `transaction-refund` fija un
+plazo global `PLAZO_GLOBAL_MS` = 15 000 ms (margen de ~3 s) con una única `AbortSignal` que se pasa a
+`refundTransaction` y `getRefund` (el cliente la combina con su timeout propio: gana el que venza primero):
+
+- Plazo agotado **durante la creación**: sin `result`, `pspReference` sin-id (camino no final de B-1071), nunca `REFUND_FAILURE`.
+- Plazo agotado **después de crear** (sondeo colgado): sin `result`, `pspReference` = id del reembolso.
+- Si tras crear quedan ≤ 1,5 s de plazo, se omiten la espera y el sondeo y se responde no final con el id conocido.
+
 **Pendiente (sin implementar):** nada cierra hoy un `REFUND_REQUEST` pendiente. `wompi-incoming.ts` no maneja
 reembolsos y la conciliación solo lista transacciones; hace falta una tarea que consulte `GET /refunds/{id}` y
 reporte `transactionEventReport` (`REFUND_SUCCESS`/`REFUND_FAILURE`). Hasta entonces un operador debe verificar

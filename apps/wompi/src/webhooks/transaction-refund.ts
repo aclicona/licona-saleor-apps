@@ -15,6 +15,14 @@ interface TransactionRefundPayload {
 const MAX_SONDEOS = 6
 const INTERVALO_SONDEO_MS = 1500
 
+/**
+ * Plazo global del handler (B-1078). Saleor espera la respuesta síncrona del webhook 18 s
+ * (WEBHOOK_WAITING_FOR_RESPONSE_TIMEOUT) y pasado eso registra REFUND_FAILURE ("Failed to delivery
+ * request."), aunque el reembolso ya exista en Wompi. Cada llamada a Wompi tiene su propio timeout de
+ * 15 s, que encadenadas suman más de 18 s; este plazo acota la SUMA y deja ~3 s de margen para responder.
+ */
+export const PLAZO_GLOBAL_MS = 15_000
+
 /** Mensajes fijos hacia Saleor: el texto del error real va solo al log. */
 const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de reembolso'
 
@@ -44,9 +52,14 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
   // Id del reembolso en Wompi, en cuanto se conoce: si algo falla después, el
   // reembolso YA existe y ese id es el pspReference de la respuesta no final.
   let refundId: string | undefined
+  // Una sola señal para todas las llamadas a Wompi: cada una usa, de hecho, el tiempo restante.
+  const inicio = Date.now()
+  const restanteMs = () => PLAZO_GLOBAL_MS - (Date.now() - inicio)
+  const plazo = new AbortController()
+  const temporizador = setTimeout(() => plazo.abort(new Error('Plazo global del reembolso agotado')), PLAZO_GLOBAL_MS)
   try {
     const cliente = wompiClient()
-    let refund = await cliente.refundTransaction(transaction.pspReference, copToCents(action.amount))
+    let refund = await cliente.refundTransaction(transaction.pspReference, copToCents(action.amount), plazo.signal)
     // Una respuesta sin `id` es id desconocido, no la cadena "undefined".
     if (refund.id != null) refundId = String(refund.id)
     log.info({ refundId: refund.id, estadoRefund: refund.status }, 'Reembolso creado en Wompi')
@@ -56,8 +69,13 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // Se sondea dentro del presupuesto del webhook síncrono de Saleor (18 s de
     // espera de respuesta: WEBHOOK_WAITING_FOR_RESPONSE_TIMEOUT).
     for (let i = 0; i < MAX_SONDEOS && refund.status === 'PENDING'; i++) {
+      // Sin tiempo para esperar y sondear dentro del plazo: se omite y se responde no final con el id ya conocido.
+      if (restanteMs() <= INTERVALO_SONDEO_MS) {
+        log.warn({ refundId, restanteMs: restanteMs() }, 'Plazo global casi agotado: se omite el sondeo del reembolso')
+        break
+      }
       await new Promise((r) => setTimeout(r, INTERVALO_SONDEO_MS))
-      refund = await cliente.getRefund(refund.id)
+      refund = await cliente.getRefund(refundId, plazo.signal)
     }
 
     const pspReference = String(refund.id)
@@ -102,5 +120,7 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
       'Estado del reembolso en Wompi desconocido; se responde sin resultado final (REFUND_REQUEST) para no cerrarlo como fallido',
     )
     return reply.send({ pspReference: refundId ?? `${transaction.pspReference}:reembolso-sin-id:${randomUUID()}` })
+  } finally {
+    clearTimeout(temporizador)
   }
 }

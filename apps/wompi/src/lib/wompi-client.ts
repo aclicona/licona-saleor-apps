@@ -72,8 +72,13 @@ export class WompiClient {
     this.baseUrl = config.sandboxMode === false ? WOMPI_PROD_URL : WOMPI_SANDBOX_URL
   }
 
-  private fetchWompi(url: string, init: RequestInit = {}): Promise<Response> {
-    return fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_WOMPI_MS) })
+  /**
+   * `plazo` (opcional) es una señal externa, p. ej. el plazo global de un webhook síncrono (B-1078):
+   * la petición se corta con lo que ocurra primero, el timeout propio o esa señal.
+   */
+  private fetchWompi(url: string, init: RequestInit = {}, plazo?: AbortSignal): Promise<Response> {
+    const propio = AbortSignal.timeout(TIMEOUT_WOMPI_MS)
+    return fetch(url, { ...init, signal: plazo ? AbortSignal.any([propio, plazo]) : propio })
   }
 
   getPublicKey(): string {
@@ -186,15 +191,19 @@ export class WompiClient {
    * en `PENDING`; pasa a `APPROVED` unos segundos después (`getRefund`).
    * `/transactions/{id}/void` solo anula por el monto completo.
    */
-  async refundTransaction(transactionId: string, amountInCents: number): Promise<WompiRefund> {
-    const res = await this.fetchWompi(`${this.baseUrl}/refunds`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.privateKey}`,
+  async refundTransaction(transactionId: string, amountInCents: number, plazo?: AbortSignal): Promise<WompiRefund> {
+    const res = await this.fetchWompi(
+      `${this.baseUrl}/refunds`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.privateKey}`,
+        },
+        body: JSON.stringify({ transaction_id: transactionId, amount_in_cents: amountInCents }),
       },
-      body: JSON.stringify({ transaction_id: transactionId, amount_in_cents: amountInCents }),
-    })
+      plazo,
+    )
     if (!res.ok) {
       const err = await res.text().catch(() => '')
       throw new WompiHttpError(`Wompi refund ${res.status}: ${err}`, res.status)
@@ -202,10 +211,12 @@ export class WompiClient {
     return ((await res.json()) as { data: WompiRefund }).data
   }
 
-  async getRefund(id: string | number): Promise<WompiRefund> {
-    const res = await this.fetchWompi(`${this.baseUrl}/refunds/${id}`, {
-      headers: { Authorization: `Bearer ${this.config.privateKey}` },
-    })
+  async getRefund(id: string | number, plazo?: AbortSignal): Promise<WompiRefund> {
+    const res = await this.fetchWompi(
+      `${this.baseUrl}/refunds/${id}`,
+      { headers: { Authorization: `Bearer ${this.config.privateKey}` } },
+      plazo,
+    )
     if (!res.ok) throw new WompiHttpError(`Wompi getRefund ${res.status}`, res.status)
     return ((await res.json()) as { data: WompiRefund }).data
   }
