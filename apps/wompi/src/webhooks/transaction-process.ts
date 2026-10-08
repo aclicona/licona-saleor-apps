@@ -54,7 +54,18 @@ export async function transactionProcessHandler(req: FastifyRequest, reply: Fast
       actions: accionesParaResultado(result),
     })
   } catch (error) {
-    log.error(error)
-    return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: String(error) })
+    // B-1057: CHARGE_FAILURE es final en Saleor. Un timeout, un fallo de red o un
+    // 5xx de Wompi dejan el estado DESCONOCIDO, que no es un rechazo: marcar la
+    // transacción como fallida aunque Wompi termine aprobando la dejaría cobrada
+    // y rota. Se responde ACTION_REQUIRED (como PENDING) y lo rescata el siguiente
+    // transactionProcess, el webhook entrante de Wompi o la conciliación (B-412).
+    log.error({ err: error }, 'No se pudo consultar Wompi; se responde CHARGE_ACTION_REQUIRED para no cerrar la transacción como fallida')
+    return reply.send({
+      result: 'CHARGE_ACTION_REQUIRED',
+      amount: action.amount,
+      pspReference: transaction.pspReference,
+      actions: accionesParaResultado('CHARGE_ACTION_REQUIRED'),
+      message: 'Estado en Wompi desconocido por un fallo transitorio; se reintentará',
+    })
   }
 }
