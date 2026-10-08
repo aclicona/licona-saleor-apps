@@ -52,8 +52,30 @@ quitar la entrada de `EXCEPCIONES`):
 | Handler | Reporte | Violación |
 |---|---|---|
 | `transaction-initialize` | B-1060 | `createTransaction` lanza → `CHARGE_FAILURE` sin `pspReference` y con `error.message` |
-| `transaction-refund` | B-1071 | catch → `REFUND_FAILURE` con `String(error)` en `message`; también si el reembolso ya existe en Wompi (falla `getRefund`) |
 | `transaction-cancel` | B-1072 | catch → `CANCEL_FAILURE` con `String(error)` en `message` ante un fallo de red al anular |
 
-Cumplen: `transaction-process` (B-1057) y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
+Cumplen: `transaction-process` (B-1057), `transaction-refund` (B-1071, ver abajo) y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
 es `transaction-*` y solo lee la llave pública, sin red.
+
+## Reembolsos: fallo de red ≠ `REFUND_FAILURE` (B-1071)
+
+`REFUND_FAILURE` es final en Saleor. En `transaction-refund`:
+
+| Situación | Respuesta |
+|---|---|
+| Wompi devuelve 4xx de validación al crear (excepto 408/429) | `REFUND_FAILURE`, `message` fijo («Wompi rechazó la solicitud de reembolso») |
+| Reembolso `DECLINED`/`ERROR`/`VOIDED` | `REFUND_FAILURE` con `status_message` de Wompi |
+| Timeout, `fetch failed`, 5xx, 408/429 al crear | sin `result`, `pspReference` = el de la transacción |
+| Cualquier fallo al sondear `getRefund` tras crear | sin `result`, `pspReference` = id del reembolso |
+| `PENDING` tras el sondeo | sin `result`, `pspReference` = id del reembolso |
+
+Saleor (`saleor/webhook/response_schemas/transaction.py`, `payment/utils.py::_validate_transaction_action_data`)
+no admite `REFUND_REQUEST` como `result` síncrono: los valores válidos son `REFUND_SUCCESS` y `REFUND_FAILURE`;
+un `result` ausente + `pspReference` (obligatorio) se trata como respuesta asíncrona y deja el evento
+`REFUND_REQUEST`, no final. Sin `pspReference` Saleor registraría un `REFUND_FAILURE`, por eso el timeout en la
+creación (sin id de reembolso) usa el de la transacción. El texto del error va solo al log.
+
+**Pendiente (sin implementar):** nada cierra hoy un `REFUND_REQUEST` pendiente. `wompi-incoming.ts` no maneja
+reembolsos y la conciliación solo lista transacciones; hace falta una tarea que consulte `GET /refunds/{id}` y
+reporte `transactionEventReport` (`REFUND_SUCCESS`/`REFUND_FAILURE`). Hasta entonces un operador debe verificar
+en Wompi antes de reintentar.

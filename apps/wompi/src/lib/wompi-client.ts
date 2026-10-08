@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { WompiHttpError } from './wompi-error.js'
 
 const WOMPI_SANDBOX_URL = 'https://sandbox.wompi.co/v1'
 const WOMPI_PROD_URL = 'https://production.wompi.co/v1'
@@ -196,7 +197,7 @@ export class WompiClient {
     })
     if (!res.ok) {
       const err = await res.text().catch(() => '')
-      throw new Error(`Wompi refund ${res.status}: ${err}`)
+      throw new WompiHttpError(`Wompi refund ${res.status}: ${err}`, res.status)
     }
     return ((await res.json()) as { data: WompiRefund }).data
   }
@@ -205,7 +206,7 @@ export class WompiClient {
     const res = await this.fetchWompi(`${this.baseUrl}/refunds/${id}`, {
       headers: { Authorization: `Bearer ${this.config.privateKey}` },
     })
-    if (!res.ok) throw new Error(`Wompi getRefund ${res.status}`)
+    if (!res.ok) throw new WompiHttpError(`Wompi getRefund ${res.status}`, res.status)
     return ((await res.json()) as { data: WompiRefund }).data
   }
 

@@ -9,6 +9,7 @@ vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
 
 import { wompiClient } from '../lib/wompi-client.js'
 import { transactionRefundHandler } from './transaction-refund.js'
+import { WompiHttpError } from '../lib/wompi-error.js'
 
 const refundTransaction = vi.fn()
 const getRefund = vi.fn()
@@ -69,10 +70,36 @@ describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => 
     const { payload } = await correr()
     expect(payload).toMatchObject({ result: 'REFUND_FAILURE', message: 'Sin fondos' })
   })
-  it('4xx de Wompi -> REFUND_FAILURE con el mensaje', async () => {
-    refundTransaction.mockRejectedValue(new Error('Wompi refund 422: {"error":"x"}'))
-    const { payload } = await correr()
-    expect(payload.result).toBe('REFUND_FAILURE')
-    expect(payload.message).toContain('Wompi refund 422')
+  it('4xx de Wompi al crear -> REFUND_FAILURE con mensaje fijo, sin el texto del error', async () => {
+    refundTransaction.mockRejectedValue(new WompiHttpError('Wompi refund 422: secreto-interno', 422))
+    const { payload, log } = await correr()
+    expect(payload).toEqual({ result: 'REFUND_FAILURE', amount: 3000, message: 'Wompi rechazó la solicitud de reembolso' })
+    expect(JSON.stringify(payload)).not.toContain('secreto-interno')
+    expect(log.error).toHaveBeenCalled()
+  })
+  it.each([
+    ['AbortError', Object.assign(new Error('secreto-interno'), { name: 'AbortError' })],
+    ['fetch failed', new TypeError('fetch failed secreto-interno')],
+    ['5xx', new WompiHttpError('Wompi refund 503: secreto-interno', 503)],
+    ['429', new WompiHttpError('Wompi refund 429: secreto-interno', 429)],
+  ])('%s al crear -> no final: solo pspReference de la transacción, sin filtrar el error', async (_n, error) => {
+    refundTransaction.mockRejectedValue(error)
+    const { payload, log } = await correr()
+    expect(payload).toEqual({ pspReference: '12084641-1791286722-99200' })
+    expect(JSON.stringify(payload)).not.toContain('secreto-interno')
+    expect(log.error).toHaveBeenCalled()
+  })
+  it.each([
+    ['AbortError', Object.assign(new Error('secreto-interno'), { name: 'AbortError' })],
+    ['fetch failed', new TypeError('fetch failed secreto-interno')],
+    ['4xx del sondeo', new WompiHttpError('Wompi getRefund 404', 404)],
+  ])('%s en el sondeo tras crear -> no final con el pspReference del reembolso', async (_n, error) => {
+    refundTransaction.mockResolvedValue(refund('PENDING'))
+    getRefund.mockRejectedValue(error)
+    const { payload, log } = await correr()
+    expect(payload).toEqual({ pspReference: '30954' })
+    expect(payload).not.toHaveProperty('result')
+    expect(JSON.stringify(payload)).not.toContain('secreto-interno')
+    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ refundId: '30954' }), expect.any(String))
   })
 })
