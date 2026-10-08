@@ -2,11 +2,15 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
+import { esRechazoDefinitivo } from '../lib/wompi-error.js'
 
 interface TransactionCancelPayload {
   transaction: { id: string; pspReference: string }
   action: { amount: number }
 }
+
+/** Mensaje fijo hacia Saleor: el texto del error real va solo al log. */
+const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de anulación'
 
 export async function transactionCancelHandler(req: FastifyRequest, reply: FastifyReply) {
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
@@ -36,7 +40,19 @@ export async function transactionCancelHandler(req: FastifyRequest, reply: Fasti
     log.info('Anulación aceptada por Wompi')
     return reply.send({ result: 'CANCEL_SUCCESS', amount: action.amount, pspReference: transaction.pspReference })
   } catch (error) {
-    log.error(error)
-    return reply.send({ result: 'CANCEL_FAILURE', amount: action.amount, message: String(error) })
+    // Rechazo cierto: un 4xx de validación (excepto 408/429) = la anulación no se aplicó.
+    if (esRechazoDefinitivo(error)) {
+      log.error({ err: error, status: error.status, amount: action.amount }, 'Wompi rechazó la anulación')
+      return reply.send({ result: 'CANCEL_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO })
+    }
+    // B-1072: CANCEL_FAILURE es final en Saleor. Un timeout, un fallo de red, un 5xx
+    // o un 408/429 dejan el estado DESCONOCIDO (la anulación pudo aplicarse en Wompi).
+    // Sin `result` + `pspReference` Saleor lo trata como respuesta asíncrona y deja el
+    // evento CANCEL_REQUEST, no final. El texto del error va solo al log.
+    log.error(
+      { err: error, amount: action.amount },
+      'Estado de la anulación en Wompi desconocido; se responde sin resultado final (CANCEL_REQUEST) para no cerrarla como fallida',
+    )
+    return reply.send({ pspReference: transaction.pspReference })
   }
 }

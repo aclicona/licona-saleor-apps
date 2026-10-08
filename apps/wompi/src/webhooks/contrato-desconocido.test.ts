@@ -84,10 +84,6 @@ const EXCEPCIONES: Record<string, { reporte: string; motivo: string }> = {
     reporte: 'B-1060',
     motivo: 'createTransaction lanza (timeout tras crear en Wompi) -> CHARGE_FAILURE sin pspReference y con error.message en message',
   },
-  'transaction-cancel': {
-    reporte: 'B-1072',
-    motivo: 'catch responde CANCEL_FAILURE con String(error) en message ante un fallo de red al anular',
-  },
 }
 
 const TEXTO_ERROR = 'secreto-interno-xyz'

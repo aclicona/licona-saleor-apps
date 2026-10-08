@@ -52,10 +52,22 @@ quitar la entrada de `EXCEPCIONES`):
 | Handler | Reporte | Violación |
 |---|---|---|
 | `transaction-initialize` | B-1060 | `createTransaction` lanza → `CHARGE_FAILURE` sin `pspReference` y con `error.message` |
-| `transaction-cancel` | B-1072 | catch → `CANCEL_FAILURE` con `String(error)` en `message` ante un fallo de red al anular |
 
-Cumplen: `transaction-process` (B-1057), `transaction-refund` (B-1071, ver abajo) y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
+Cumplen: `transaction-process` (B-1057), `transaction-refund` (B-1071, ver abajo), `transaction-cancel` (B-1072, ver «Anulaciones») y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
 es `transaction-*` y solo lee la llave pública, sin red.
+
+## Anulaciones: fallo de red ≠ `CANCEL_FAILURE` (B-1072)
+
+`CANCEL_FAILURE` es final en Saleor. En `transaction-cancel`:
+
+| Situación | Respuesta |
+|---|---|
+| Sin `pspReference` en el payload | `CANCEL_FAILURE`, `message` fijo («Sin pspReference») |
+| Wompi devuelve 4xx de validación (excepto 408/429) | `CANCEL_FAILURE`, `message` fijo («Wompi rechazó la solicitud de anulación») |
+| Timeout, `fetch failed`, 5xx, 408/429 | sin `result`, `pspReference` = el de la transacción (respuesta asíncrona: deja `CANCEL_REQUEST`, no final) |
+
+La anulación pudo aplicarse en Wompi, por eso el estado desconocido no se cierra como fallido. Se concilia
+consultando la transacción en Wompi. El texto del error va solo al log.
 
 ## Reembolsos: fallo de red ≠ `REFUND_FAILURE` (B-1071)
 
