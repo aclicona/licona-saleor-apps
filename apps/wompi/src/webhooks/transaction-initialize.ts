@@ -191,7 +191,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
         ? 'Wompi: referencia duplicada al crear; se busca la transacción existente por reference'
         : 'Estado de la transacción en Wompi desconocido; se intenta localizarla por reference',
     )
-    const existente = await buscarPorReferencia(client, reference, plazo.signal, log)
+    const existente = await buscarPorReferencia(client, { reference, centavos: copToCents(action.amount), detalle: duplicada ? detalleReferencia(error) : undefined }, plazo.signal, log)
     if (existente) {
       const result = RESULTADO_POR_ESTADO[existente.status] ?? 'CHARGE_ACTION_REQUIRED'
       log.info({ pspReference: existente.id, estadoWompi: existente.status, result }, 'Transacción localizada en Wompi por reference')
@@ -200,7 +200,9 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
         amount: action.amount,
         pspReference: existente.id,
         actions: accionesParaResultado(result),
-        ...(result === 'CHARGE_ACTION_REQUIRED'
+        // `redirect_url` es la que mandamos al crear (/checkout/orden/<id>): pago.vue la necesita también con
+        // CHARGE_SUCCESS, o muestra INCOMPLETE_RESPONSE a un comprador que ya pagó.
+        ...(result !== 'CHARGE_FAILURE'
           ? { data: { ...(existente.redirect_url ? { redirectUrl: existente.redirect_url } : {}), wompiTransactionId: existente.id } }
           : {}),
       })
@@ -216,14 +218,29 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   }
 }
 
+/** Texto de `messages.reference` del 422 (lo genera Wompi; no contiene datos del comprador). */
+function detalleReferencia(error: unknown): unknown {
+  return (error as { cuerpo?: { error?: { messages?: { reference?: unknown } } } }).cuerpo?.error?.messages?.reference
+}
+
+interface Busqueda {
+  reference: string
+  /** Importe esperado en centavos: defensa en profundidad contra asociar una transacción de otro importe. */
+  centavos: number
+  /** Presente solo en el 422 duplicado: Wompi afirma que la referencia existe, así que no encontrarla es una contradicción. */
+  detalle?: unknown
+}
+
 /**
  * Busca en Wompi la transacción de esta `reference` (B-1095). Solo si queda plazo; devuelve la transacción únicamente
- * si hay UNA coincidencia exacta. Cero (aún no indexada / nunca creada), varias (no debería: Wompi exige referencia
- * única; no se adivina) o cualquier fallo -> `undefined`, y el llamador responde ACTION_REQUIRED sin pspReference.
+ * si hay UNA coincidencia exacta con el importe y la moneda esperados. Cero (aún no indexada / nunca creada), varias
+ * (no debería: Wompi exige referencia única; no se adivina), importe o moneda distintos, o cualquier fallo ->
+ * `undefined`, y el llamador responde ACTION_REQUIRED sin pspReference. Las anomalías que ningún reintento arregla
+ * se registran con «revisión humana» (B-1090).
  */
 async function buscarPorReferencia(
   client: { findTransactionsByReference(reference: string, plazo?: AbortSignal): Promise<WompiTransaction[]> } | undefined,
-  reference: string,
+  { reference, centavos, detalle }: Busqueda,
   plazo: AbortSignal,
   log: { warn: (o: object, m: string) => void; error: (o: object, m: string) => void },
 ): Promise<WompiTransaction | undefined> {
@@ -231,8 +248,23 @@ async function buscarPorReferencia(
   try {
     // Defensa en profundidad: aunque el cliente ya filtra, aquí no se mapea nada con otra referencia.
     const exactas = (await client.findTransactionsByReference(reference, plazo)).filter((t) => t.reference === reference)
-    if (exactas.length === 1) return exactas[0]
-    log.warn({ reference, coincidencias: exactas.length }, 'Búsqueda por reference sin una coincidencia única; no se asocia ninguna transacción')
+    if (exactas.length === 1) {
+      const t = exactas[0]
+      if (t.amount_in_cents === centavos && t.currency === 'COP') return t
+      log.error(
+        { reference, pspReference: t.id, esperadoCentavos: centavos, recibidoCentavos: t.amount_in_cents, moneda: t.currency },
+        'La transacción hallada por reference no coincide en importe o moneda: no se asocia a la sesión — requiere revisión humana',
+      )
+      return undefined
+    }
+    if (detalle !== undefined) {
+      log.error(
+        { reference, coincidencias: exactas.length, detalleReferencia: detalle },
+        'Wompi dice que la referencia ya existe pero la búsqueda no devuelve una única transacción — requiere revisión humana',
+      )
+    } else {
+      log.warn({ reference, coincidencias: exactas.length }, 'Búsqueda por reference sin una coincidencia única; no se asocia ninguna transacción')
+    }
   } catch (err) {
     log.error({ err, reference }, 'Falló la búsqueda por reference en Wompi; se responde sin pspReference')
   }

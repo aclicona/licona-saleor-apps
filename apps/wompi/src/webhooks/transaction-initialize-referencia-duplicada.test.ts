@@ -61,6 +61,7 @@ async function correr() {
 }
 
 const REF_ESPERADA = referenciaParaWompi('VHJhbnNhY3Rpb25JdGVtOjE=')
+const BASE = { reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP' }
 const duplicada = () =>
   new WompiHttpError(`Wompi 422: ${TEXTO_ERROR}`, 422, {
     error: { type: 'INPUT_VALIDATION_ERROR', messages: { reference: ['La referencia ya ha sido usada'] } },
@@ -95,7 +96,7 @@ afterEach(() => {
 
 describe('transaction-initialize — 422 «referencia duplicada» (B-1095)', () => {
   it('la huérfana PENDING existe -> CHARGE_ACTION_REQUIRED con su pspReference, nunca CHARGE_FAILURE', async () => {
-    findTransactionsByReference.mockResolvedValue([{ id: 'w-huerfana', status: 'PENDING', reference: REF_ESPERADA, redirect_url: 'https://r.co/x' }])
+    findTransactionsByReference.mockResolvedValue([{ id: 'w-huerfana', status: 'PENDING', reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP', redirect_url: 'https://r.co/x' }])
     const { payload } = await correr()
     expect(payload).toMatchObject({
       result: 'CHARGE_ACTION_REQUIRED',
@@ -108,13 +109,13 @@ describe('transaction-initialize — 422 «referencia duplicada» (B-1095)', () 
   })
 
   it('la huérfana ya está APPROVED -> CHARGE_SUCCESS con pspReference y acción REFUND', async () => {
-    findTransactionsByReference.mockResolvedValue([{ id: 'w-ok', status: 'APPROVED', reference: REF_ESPERADA }])
+    findTransactionsByReference.mockResolvedValue([{ id: 'w-ok', status: 'APPROVED', reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP' }])
     const { payload } = await correr()
     expect(payload).toMatchObject({ result: 'CHARGE_SUCCESS', amount: 120_000, pspReference: 'w-ok', actions: ['REFUND'] })
   })
 
   it('la huérfana quedó DECLINED -> CHARGE_FAILURE con su pspReference (el estado es cierto, no un fallo del cliente)', async () => {
-    findTransactionsByReference.mockResolvedValue([{ id: 'w-no', status: 'DECLINED', reference: REF_ESPERADA }])
+    findTransactionsByReference.mockResolvedValue([{ id: 'w-no', status: 'DECLINED', reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP' }])
     const { payload } = await correr()
     expect(payload).toMatchObject({ result: 'CHARGE_FAILURE', pspReference: 'w-no' })
   })
@@ -132,8 +133,8 @@ describe('transaction-initialize — 422 «referencia duplicada» (B-1095)', () 
 
   it('varias coincidencias exactas (no debería pasar) -> no se elige: ACTION_REQUIRED sin pspReference', async () => {
     findTransactionsByReference.mockResolvedValue([
-      { id: 'a', status: 'APPROVED', reference: REF_ESPERADA },
-      { id: 'b', status: 'PENDING', reference: REF_ESPERADA },
+      { id: 'a', status: 'APPROVED', reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP' },
+      { id: 'b', status: 'PENDING', reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP' },
     ])
     const { payload } = await correr()
     expect(payload).toEqual(SIN_PSP)
@@ -195,7 +196,7 @@ describe('transaction-initialize — 422 «referencia duplicada» (B-1095)', () 
 describe('transaction-initialize — estado desconocido con plazo disponible (B-1095)', () => {
   it('fetch failed al crear y la transacción sí existe -> responde con su pspReference', async () => {
     createTransaction.mockRejectedValue(fetchFailed())
-    findTransactionsByReference.mockResolvedValue([{ id: 'w-creada', status: 'PENDING', reference: REF_ESPERADA }])
+    findTransactionsByReference.mockResolvedValue([{ id: 'w-creada', status: 'PENDING', reference: REF_ESPERADA, amount_in_cents: 12_000_000, currency: 'COP' }])
     const { payload } = await correr()
     expect(payload).toMatchObject({ result: 'CHARGE_ACTION_REQUIRED', pspReference: 'w-creada' })
   })
@@ -205,5 +206,73 @@ describe('transaction-initialize — estado desconocido con plazo disponible (B-
     const { payload } = await correr()
     expect(findTransactionsByReference).not.toHaveBeenCalled()
     expect(payload).toEqual(SIN_PSP)
+  })
+})
+
+describe('transaction-initialize — B-1095 revisión Opus', () => {
+  const URL_ORDEN = 'https://tienda.co/checkout/orden/VHJhbnNhY3Rpb25JdGVtOjE='
+
+  it('APPROVED con redirect_url -> CHARGE_SUCCESS lleva data.redirectUrl para que pago.vue redirija', async () => {
+    findTransactionsByReference.mockResolvedValue([{ ...BASE, id: 'w-ok', status: 'APPROVED', redirect_url: URL_ORDEN }])
+    const { payload } = await correr()
+    expect(payload).toMatchObject({
+      result: 'CHARGE_SUCCESS',
+      pspReference: 'w-ok',
+      data: { redirectUrl: URL_ORDEN, wompiTransactionId: 'w-ok' },
+    })
+  })
+
+  it('APPROVED sin redirect_url -> CHARGE_SUCCESS sin data.redirectUrl', async () => {
+    findTransactionsByReference.mockResolvedValue([{ ...BASE, id: 'w-ok', status: 'APPROVED' }])
+    const { payload } = await correr()
+    expect(payload.result).toBe('CHARGE_SUCCESS')
+    expect(payload.data?.redirectUrl).toBeUndefined()
+  })
+
+  it('PENDING sin redirect_url -> ACTION_REQUIRED con pspReference y data solo con wompiTransactionId', async () => {
+    findTransactionsByReference.mockResolvedValue([{ ...BASE, id: 'w-p', status: 'PENDING' }])
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ result: 'CHARGE_ACTION_REQUIRED', pspReference: 'w-p', data: { wompiTransactionId: 'w-p' } })
+    expect(payload.data).not.toHaveProperty('redirectUrl')
+  })
+
+  it.each(['VOIDED', 'ERROR'])('%s -> CHARGE_FAILURE con su pspReference y sin data', async (status) => {
+    findTransactionsByReference.mockResolvedValue([{ ...BASE, id: 'w-x', status, redirect_url: URL_ORDEN }])
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ result: 'CHARGE_FAILURE', pspReference: 'w-x' })
+    expect(payload).not.toHaveProperty('data')
+  })
+
+  it('estado desconocido de Wompi -> ACTION_REQUIRED con pspReference (no se inventa un resultado)', async () => {
+    findTransactionsByReference.mockResolvedValue([{ ...BASE, id: 'w-raro', status: 'NUEVO_ESTADO' }])
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ result: 'CHARGE_ACTION_REQUIRED', pspReference: 'w-raro' })
+  })
+
+  it('422 duplicada y 0 coincidencias (contradicción) -> log.error con «revisión humana» y el detalle de messages.reference', async () => {
+    findTransactionsByReference.mockResolvedValue([])
+    const { payload, log } = await correr()
+    expect(payload).toEqual(SIN_PSP)
+    const llamada = log.error.mock.calls.find(([, msg]) => /revisión humana/i.test(msg))
+    expect(llamada, 'debe haber un log.error con el marcador').toBeDefined()
+    expect(llamada![0]).toMatchObject({ reference: REF_ESPERADA, detalleReferencia: ['La referencia ya ha sido usada'] })
+    expect(JSON.stringify(llamada![0])).not.toContain('cliente@example.com')
+  })
+
+  it('estado desconocido (no 422) y 0 coincidencias -> NO es contradicción: sin marcador de revisión humana', async () => {
+    createTransaction.mockRejectedValue(fetchFailed())
+    const { log } = await correr()
+    expect(log.error.mock.calls.some(([, msg]) => /revisión humana/i.test(msg))).toBe(false)
+  })
+
+  it.each([
+    ['importe distinto', { amount_in_cents: 5_000_000 }],
+    ['moneda distinta', { currency: 'USD' }],
+    ['importe ausente', { amount_in_cents: undefined }],
+  ])('LOW-1: %s -> ACTION_REQUIRED sin pspReference y log.error con «revisión humana»', async (_n, cambio) => {
+    findTransactionsByReference.mockResolvedValue([{ ...BASE, ...cambio, id: 'w-raro', status: 'APPROVED' }])
+    const { payload, log } = await correr()
+    expect(payload).toEqual(SIN_PSP)
+    expect(log.error.mock.calls.some(([, msg]) => /revisión humana/i.test(msg))).toBe(true)
   })
 })

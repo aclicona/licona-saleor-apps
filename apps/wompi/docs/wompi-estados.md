@@ -84,9 +84,14 @@ rápido) se busca la transacción con `findTransactionsByReference` y se respond
 
 | Búsqueda | Respuesta |
 |---|---|
-| Una coincidencia exacta `APPROVED` / `PENDING` | `CHARGE_SUCCESS` (+`REFUND`) / `CHARGE_ACTION_REQUIRED`, con su `pspReference` (y `data.redirectUrl` si Wompi lo trae) |
+| Una coincidencia exacta `APPROVED` / `PENDING` (estado desconocido de Wompi: como `PENDING`) | `CHARGE_SUCCESS` (+`REFUND`) / `CHARGE_ACTION_REQUIRED`, con su `pspReference` y `data { redirectUrl?, wompiTransactionId }` en ambos casos: `redirectUrl` es la `/checkout/orden/<id>` que se mandó al crear, y `pago.vue` la necesita también con `CHARGE_SUCCESS` (sin ella muestra INCOMPLETE_RESPONSE a un comprador que ya pagó) |
 | Una coincidencia exacta `DECLINED` / `ERROR` / `VOIDED` | `CHARGE_FAILURE` con su `pspReference`: el estado es cierto (Wompi no admite reutilizar la referencia) |
-| 0 coincidencias, varias, error de red/5xx, o plazo agotado (no se busca) | `CHARGE_ACTION_REQUIRED` sin `pspReference` (el inicio ambiguo de siempre); **nunca** `CHARGE_FAILURE` |
+| 0 coincidencias, varias, importe o moneda distintos del request, error de red/5xx, o plazo agotado (no se busca) | `CHARGE_ACTION_REQUIRED` sin `pspReference` (el inicio ambiguo de siempre); **nunca** `CHARGE_FAILURE` |
+
+**Avisos humanos (B-1090):** con 422 duplicado, que Wompi diga «ya existe» y la búsqueda no devuelva UNA transacción
+es una contradicción: `log.error` con «revisión humana» y `detalleReferencia` (el texto de `messages.reference`, sin
+datos del comprador). Igual si la transacción hallada tiene otro importe o moneda que el request (no se asocia). Un
+estado desconocido sin coincidencias (no 422) NO lleva marcador: es el caso normal de una creación que no llegó.
 
 **Contrato medido (sandbox, 2026-10-09):** `GET /transactions?reference=<ref>` FILTRA de verdad (existente -> 1 fila,
 inexistente -> 0; sin `meta`). Aun así el cliente vuelve a filtrar por `reference` exacta y el handler exige UNA
