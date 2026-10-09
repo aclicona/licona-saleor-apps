@@ -94,36 +94,40 @@ export class WompiClient {
     return createHash('sha256').update(data).digest('hex')
   }
 
-  async getAcceptanceToken(): Promise<string> {
-    const res = await this.fetchWompi(`${this.baseUrl}/merchants/${this.config.publicKey}`)
-    if (!res.ok) throw new Error(`Wompi merchants ${res.status}`)
+  async getAcceptanceToken(plazo?: AbortSignal): Promise<string> {
+    const res = await this.fetchWompi(`${this.baseUrl}/merchants/${this.config.publicKey}`, {}, plazo)
+    if (!res.ok) throw new WompiHttpError(`Wompi merchants ${res.status}`, res.status)
     const body = (await res.json()) as {
       data: { presigned_acceptance: { acceptance_token: string } }
     }
     return body.data.presigned_acceptance.acceptance_token
   }
 
-  async createTransaction(params: CreateTransactionParams): Promise<WompiTransaction> {
-    const res = await this.fetchWompi(`${this.baseUrl}/transactions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.privateKey}`,
+  async createTransaction(params: CreateTransactionParams, plazo?: AbortSignal): Promise<WompiTransaction> {
+    const res = await this.fetchWompi(
+      `${this.baseUrl}/transactions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.privateKey}`,
+        },
+        body: JSON.stringify({
+          amount_in_cents: params.amountInCents,
+          currency: params.currency,
+          customer_email: params.customerEmail,
+          reference: params.reference,
+          redirect_url: params.redirectUrl,
+          acceptance_token: params.acceptanceToken,
+          signature: this.integritySignature(params.reference, params.amountInCents, params.currency),
+          payment_method: params.paymentMethod ?? { type: 'CARD' },
+        }),
       },
-      body: JSON.stringify({
-        amount_in_cents: params.amountInCents,
-        currency: params.currency,
-        customer_email: params.customerEmail,
-        reference: params.reference,
-        redirect_url: params.redirectUrl,
-        acceptance_token: params.acceptanceToken,
-        signature: this.integritySignature(params.reference, params.amountInCents, params.currency),
-        payment_method: params.paymentMethod ?? { type: 'CARD' },
-      }),
-    })
+      plazo,
+    )
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(`Wompi ${res.status}: ${JSON.stringify(err)}`)
+      throw new WompiHttpError(`Wompi ${res.status}: ${JSON.stringify(err)}`, res.status)
     }
     return ((await res.json()) as { data: WompiTransaction }).data
   }

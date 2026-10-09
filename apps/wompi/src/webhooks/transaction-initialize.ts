@@ -6,6 +6,13 @@ import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { referenciaParaWompi } from '../lib/referencia.js'
 import { validarDatosTarjeta } from '../lib/tarjeta.js'
+import { esRechazoDefinitivo } from '../lib/wompi-error.js'
+import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
+
+/** Mensajes fijos hacia Saleor (B-1060): el texto del error real va solo al log. */
+const MENSAJE_SIN_TRANSACCION = 'No se pudo iniciar el pago con Wompi'
+const MENSAJE_RECHAZO = 'Wompi rechazó la transacción'
+const MENSAJE_DESCONOCIDO = 'Estado en Wompi desconocido por un fallo transitorio; se resolverá por conciliación'
 
 interface TransactionInitializePayload {
   transaction: { id: string; pspReference: string }
@@ -37,6 +44,8 @@ interface TransactionInitializePayload {
 }
 
 export async function transactionInitializeHandler(req: FastifyRequest, reply: FastifyReply) {
+  // El plazo global cuenta desde la llegada de la petición (B-1078): Saleor ya está contando sus 18 s.
+  const inicio = Date.now()
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
   // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
   // de verificar la firma para que también quede constancia de lo que se rechaza.
@@ -79,11 +88,21 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: tarjeta.message })
   }
 
+  // Una sola señal para token + creación. Se crea tras los return tempranos (no dejan temporizador vivo)
+  // y se limpia en `finally`.
+  const plazo = new AbortController()
+  const temporizador = setTimeout(
+    () => plazo.abort(new Error('Plazo global del inicio agotado')),
+    Math.max(0, PLAZO_GLOBAL_MS - (Date.now() - inicio)),
+  )
+  // 'token': aún no existe nada en Wompi. 'crear': la transacción pudo crearse aunque la respuesta no llegue.
+  let fase: 'token' | 'crear' = 'token'
+
   try {
     // Saleor sends COP (e.g. 120000). Wompi expects centavos (12000000).
     const amountInCents = copToCents(action.amount)
     const client = wompiClient()
-    const acceptanceToken = await client.getAcceptanceToken()
+    const acceptanceToken = await client.getAcceptanceToken(plazo.signal)
 
     let paymentMethod: NonNullable<Parameters<typeof client.createTransaction>[0]['paymentMethod']>
     switch (method) {
@@ -117,7 +136,9 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
         paymentMethod = { type: method }
     }
 
-    const wompiTxn = await client.createTransaction({
+    fase = 'crear'
+    const wompiTxn = await client.createTransaction(
+      {
       amountInCents,
       currency: 'COP',
       customerEmail,
@@ -125,7 +146,9 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       redirectUrl: `${storefrontUrl}/checkout/orden/${transaction.id}`,
       acceptanceToken,
       paymentMethod,
-    })
+      },
+      plazo.signal,
+    )
 
     // Camino feliz explícito: aquí es donde el hilo de Saleor se ata al de
     // Wompi (el id de Wompi pasa a ser el pspReference). Sin esta línea la
@@ -140,11 +163,31 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       data: { redirectUrl: wompiTxn.redirect_url, wompiTransactionId: wompiTxn.id },
     })
   } catch (error) {
-    log.error(error)
+    // Antes de crear no hay transacción en Wompi: el fallo es cierto.
+    if (fase === 'token') {
+      log.error({ err: error, fase, metodo: method, amount: action.amount }, 'No se pudo obtener el acceptance token de Wompi')
+      return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: MENSAJE_SIN_TRANSACCION })
+    }
+    // Rechazo cierto: 4xx al crear (422 referencia duplicada, 400 token inválido...).
+    if (esRechazoDefinitivo(error)) {
+      log.error({ err: error, status: error.status }, 'Wompi rechazó crear la transacción')
+      return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO })
+    }
+    // B-1060: CHARGE_FAILURE es final en Saleor. Un timeout, fallo de red, 5xx o 408/429 al CREAR dejan el
+    // estado DESCONOCIDO (la transacción pudo crearse). CHARGE_ACTION_REQUIRED admite `pspReference` opcional;
+    // el webhook de Wompi y la conciliación resuelven por `reference`, que no depende del pspReference.
+    const nivel = plazo.signal.aborted ? 'warn' : 'error'
+    log[nivel](
+      { err: error, reference, metodo: method, amount: action.amount },
+      'Estado de la transacción en Wompi desconocido; se responde CHARGE_ACTION_REQUIRED sin pspReference',
+    )
     return reply.send({
-      result: 'CHARGE_FAILURE',
+      result: 'CHARGE_ACTION_REQUIRED',
       amount: action.amount,
-      message: error instanceof Error ? error.message : 'Error al crear transacción en Wompi',
+      actions: accionesParaResultado('CHARGE_ACTION_REQUIRED'),
+      message: MENSAJE_DESCONOCIDO,
     })
+  } finally {
+    clearTimeout(temporizador)
   }
 }

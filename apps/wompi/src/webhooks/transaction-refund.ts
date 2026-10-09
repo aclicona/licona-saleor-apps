@@ -5,6 +5,7 @@ import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { esRechazoDefinitivo } from '../lib/wompi-error.js'
+import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
 
 interface TransactionRefundPayload {
   transaction: { id: string; pspReference: string }
@@ -15,13 +16,7 @@ interface TransactionRefundPayload {
 const MAX_SONDEOS = 6
 const INTERVALO_SONDEO_MS = 1500
 
-/**
- * Plazo global del handler (B-1078). Saleor espera la respuesta síncrona del webhook 18 s
- * (WEBHOOK_WAITING_FOR_RESPONSE_TIMEOUT) y pasado eso registra REFUND_FAILURE ("Failed to delivery
- * request."), aunque el reembolso ya exista en Wompi. Cada llamada a Wompi tiene su propio timeout de
- * 15 s, que encadenadas suman más de 18 s; este plazo acota la SUMA y deja ~3 s de margen para responder.
- */
-export const PLAZO_GLOBAL_MS = 15_000
+export { PLAZO_GLOBAL_MS }
 
 /** Mensajes fijos hacia Saleor: el texto del error real va solo al log. */
 const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de reembolso'

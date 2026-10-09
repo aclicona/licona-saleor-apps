@@ -47,14 +47,37 @@ una aserción que enumera los `transaction-*.ts` del directorio y falla si falta
 handler hay que darlo de alta ahí).
 
 Excepciones conocidas (el test exige que la violación **siga** ocurriendo; al arreglarla se pone rojo y hay que
-quitar la entrada de `EXCEPCIONES`):
+quitar la entrada de `EXCEPCIONES`): ninguna.
 
-| Handler | Reporte | Violación |
-|---|---|---|
-| `transaction-initialize` | B-1060 | `createTransaction` lanza → `CHARGE_FAILURE` sin `pspReference` y con `error.message` |
-
-Cumplen: `transaction-process` (B-1057), `transaction-refund` (B-1071, ver abajo), `transaction-cancel` (B-1072, ver «Anulaciones») y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
+Cumplen: `transaction-initialize` (B-1060, ver abajo), `transaction-process` (B-1057), `transaction-refund` (B-1071, ver abajo), `transaction-cancel` (B-1072, ver «Anulaciones») y `transaction-charge` (no llama a Wompi). `payment-gateway-initialize` no
 es `transaction-*` y solo lee la llave pública, sin red.
+
+## Inicio: fallo de transporte ≠ `CHARGE_FAILURE` (B-1060)
+
+`CHARGE_FAILURE` es final en Saleor. En `transaction-initialize` hay dos fases: `token` (acceptance token; aún no
+existe nada en Wompi) y `crear` (la transacción pudo crearse aunque la respuesta no llegue). Los mensajes hacia
+Saleor son fijos; el texto del error va solo al log.
+
+| Situación | Respuesta |
+|---|---|
+| Cualquier fallo al obtener el acceptance token (fase `token`) | `CHARGE_FAILURE`, `message` fijo («No se pudo iniciar el pago con Wompi») |
+| Wompi devuelve 4xx al crear, excepto 408/429 (422 referencia duplicada, 400 token inválido...) | `CHARGE_FAILURE`, `message` fijo («Wompi rechazó la transacción») |
+| Timeout/plazo, `fetch failed`, 5xx, 408/429 al crear | `CHARGE_ACTION_REQUIRED` sin `pspReference` ni `data`, `actions` vacío, `message` fijo («Estado en Wompi desconocido...»). Log `warn` si fue el plazo, `error` si no |
+
+Esquema de Saleor (fork): en `TransactionSessionActionRequiredSchema` el `psp_reference` es **opcional**;
+`CHARGE_REQUEST` lo exige (no sirve aquí) y `result` es obligatorio en la sesión (omitirlo acaba en evento fallido).
+Por eso se usa `CHARGE_ACTION_REQUIRED` sin `pspReference`.
+
+**Rescate:** la transacción huérfana se resuelve por `reference` (el id de transacción de Saleor): el webhook de
+Wompi (`wompi-incoming.ts`) y la conciliación (`conciliacion.ts`) casan por `reference`, no por `pspReference`.
+
+**Storefront:** con `CHARGE_ACTION_REQUIRED` sin `redirectUrl`, `pago.vue` muestra INCOMPLETE_RESPONSE y conserva
+la `idempotencyKey`.
+
+**Trampa del reintento (seguimiento pendiente):** si el comprador reintenta con la misma `idempotencyKey` y la
+transacción huérfana existe en Wompi, éste responde 422 «referencia duplicada» → `CHARGE_FAILURE`. No se pierde
+dinero (el webhook acredita por `reference`) pero el comprador queda en bucle. Pendiente: buscar por `reference`
+en Wompi tras verificar el filtro en el sandbox.
 
 ## Anulaciones: fallo de red ≠ `CANCEL_FAILURE` (B-1072)
 
@@ -92,6 +115,8 @@ con la misma referencia contarían como uno y `charged_value` quedaría mal. Ese
 Wompi los reembolsos de la transacción**: la referencia generada no casa con ningún id real. El texto del error va solo al log.
 
 ### Plazo global de 15 s (B-1078)
+
+`PLAZO_GLOBAL_MS` vive en `src/lib/plazo.ts`. Aplica también a `transaction-initialize` (firma + token + crear, B-1060), con la misma señal para ambas llamadas.
 
 Saleor espera 18 s la respuesta síncrona del webhook y, pasado ese tiempo, registra `REFUND_FAILURE`
 («Failed to delivery request.») aunque el reembolso ya exista en Wompi. Cada llamada a Wompi tiene su propio timeout

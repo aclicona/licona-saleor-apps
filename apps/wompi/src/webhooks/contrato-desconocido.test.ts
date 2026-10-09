@@ -78,13 +78,8 @@ const TABLA: Record<string, Entrada> = {
   },
 }
 
-/** Violaciones conocidas: el test exige que SIGAN ocurriendo hasta que se arreglen. */
-const EXCEPCIONES: Record<string, { reporte: string; motivo: string }> = {
-  'transaction-initialize': {
-    reporte: 'B-1060',
-    motivo: 'createTransaction lanza (timeout tras crear en Wompi) -> CHARGE_FAILURE sin pspReference y con error.message en message',
-  },
-}
+/** Violaciones conocidas: el test exige que SIGAN ocurriendo hasta que se arreglen. Hoy no hay ninguna. */
+const EXCEPCIONES: Record<string, { reporte: string; motivo: string }> = {}
 
 const TEXTO_ERROR = 'secreto-interno-xyz'
 const FALLOS: Record<string, () => Error> = {

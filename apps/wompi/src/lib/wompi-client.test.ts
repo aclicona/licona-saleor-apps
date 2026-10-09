@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { WompiClient, TIMEOUT_WOMPI_MS } from './wompi-client.js'
+import { WompiHttpError } from './wompi-error.js'
+
+const PARAMS_CREAR = { amountInCents: 1000, currency: 'COP', customerEmail: 'a@b.co', reference: 'r', redirectUrl: 'https://x.co', acceptanceToken: 't' } as const
 
 function crearClientePrueba() {
   return new WompiClient({
@@ -250,6 +253,8 @@ describe('WompiClient — señal de plazo externa (B-1078)', () => {
   it.each([
     ['refundTransaction', (c: WompiClient, s: AbortSignal) => c.refundTransaction('tx', 100, s)],
     ['getRefund', (c: WompiClient, s: AbortSignal) => c.getRefund(1, s)],
+    ['getAcceptanceToken', (c: WompiClient, s: AbortSignal) => c.getAcceptanceToken(s)],
+    ['createTransaction', (c: WompiClient, s: AbortSignal) => c.createTransaction(PARAMS_CREAR, s)],
   ])('%s: abortar el plazo externo aborta el fetch y rechaza con su reason', async (_n, llamar) => {
     const fetchMock = fetchColgado()
     vi.stubGlobal('fetch', fetchMock)
@@ -259,5 +264,12 @@ describe('WompiClient — señal de plazo externa (B-1078)', () => {
     externo.abort(razon)
     await expect(promesa).rejects.toBe(razon)
     expect(fetchMock.mock.calls[0][1].signal!.aborted).toBe(true)
+  })
+
+  it('createTransaction no-ok lanza WompiHttpError con el status', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 422, json: () => Promise.resolve({ error: 'dup' }) }))
+    const error = await crearClientePrueba().createTransaction(PARAMS_CREAR).catch((e) => e)
+    expect(error).toBeInstanceOf(WompiHttpError)
+    expect(error.status).toBe(422)
   })
 })
