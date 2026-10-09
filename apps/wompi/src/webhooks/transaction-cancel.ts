@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
+import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { esRechazoDefinitivo } from '../lib/wompi-error.js'
@@ -13,6 +13,8 @@ interface TransactionCancelPayload {
 const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de anulación'
 
 export async function transactionCancelHandler(req: FastifyRequest, reply: FastifyReply) {
+  // El plazo global cuenta desde la llegada de la petición (B-1080): ver transaction-process.ts.
+  const plazo = crearPlazo()
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
   // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
   // de verificar la firma para que también quede constancia de lo que se rechaza.
@@ -36,7 +38,7 @@ export async function transactionCancelHandler(req: FastifyRequest, reply: Fasti
   }
 
   try {
-    await wompiClient().voidTransaction(transaction.pspReference)
+    await wompiClient().voidTransaction(transaction.pspReference, plazo.signal)
     log.info('Anulación aceptada por Wompi')
     return reply.send({ result: 'CANCEL_SUCCESS', amount: action.amount, pspReference: transaction.pspReference })
   } catch (error) {
@@ -54,5 +56,7 @@ export async function transactionCancelHandler(req: FastifyRequest, reply: Fasti
       'Estado de la anulación en Wompi desconocido; se responde sin resultado final (CANCEL_REQUEST) para no cerrarla como fallida',
     )
     return reply.send({ pspReference: transaction.pspReference })
+  } finally {
+    plazo.limpiar()
   }
 }

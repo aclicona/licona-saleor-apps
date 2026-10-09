@@ -44,7 +44,8 @@ describe('transactionCancelHandler (B-1072)', () => {
   it('anulación aceptada -> CANCEL_SUCCESS con el pspReference de la transacción', async () => {
     voidTransaction.mockResolvedValue({})
     const { payload } = await correr()
-    expect(voidTransaction).toHaveBeenCalledWith(PSP)
+    // B-1080: la anulación recibe la señal del plazo global.
+    expect(voidTransaction).toHaveBeenCalledWith(PSP, expect.any(AbortSignal))
     expect(payload).toEqual({ result: 'CANCEL_SUCCESS', amount: 3000, pspReference: PSP })
   })
 

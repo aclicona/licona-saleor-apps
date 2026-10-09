@@ -255,6 +255,8 @@ describe('WompiClient — señal de plazo externa (B-1078)', () => {
     ['getRefund', (c: WompiClient, s: AbortSignal) => c.getRefund(1, s)],
     ['getAcceptanceToken', (c: WompiClient, s: AbortSignal) => c.getAcceptanceToken(s)],
     ['createTransaction', (c: WompiClient, s: AbortSignal) => c.createTransaction(PARAMS_CREAR, s)],
+    ['getTransaction', (c: WompiClient, s: AbortSignal) => c.getTransaction('tx', s)],
+    ['voidTransaction', (c: WompiClient, s: AbortSignal) => c.voidTransaction('tx', s)],
   ])('%s: abortar el plazo externo aborta el fetch y rechaza con su reason', async (_n, llamar) => {
     const fetchMock = fetchColgado()
     vi.stubGlobal('fetch', fetchMock)

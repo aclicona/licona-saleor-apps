@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
+import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { accionesParaResultado } from '../lib/acciones.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
@@ -21,6 +21,9 @@ const WOMPI_STATUS_MAP: Record<string, string> = {
 }
 
 export async function transactionProcessHandler(req: FastifyRequest, reply: FastifyReply) {
+  // El plazo global cuenta desde la llegada de la petición (B-1080): Saleor ya está contando sus 18 s, y
+  // la verificación de la firma (JWKS, hasta 5 s) más el timeout propio de Wompi (15 s) los superaban.
+  const plazo = crearPlazo()
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
   // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
   // de verificar la firma para que también quede constancia de lo que se rechaza.
@@ -44,7 +47,7 @@ export async function transactionProcessHandler(req: FastifyRequest, reply: Fast
   }
 
   try {
-    const wompiTxn = await wompiClient().getTransaction(transaction.pspReference)
+    const wompiTxn = await wompiClient().getTransaction(transaction.pspReference, plazo.signal)
     log.info({ estadoWompi: wompiTxn.status }, 'Estado consultado en Wompi')
     const result = WOMPI_STATUS_MAP[wompiTxn.status] ?? 'CHARGE_ACTION_REQUIRED'
     return reply.send({
@@ -67,5 +70,7 @@ export async function transactionProcessHandler(req: FastifyRequest, reply: Fast
       actions: accionesParaResultado('CHARGE_ACTION_REQUIRED'),
       message: 'Estado en Wompi desconocido por un fallo transitorio; se reintentará',
     })
+  } finally {
+    plazo.limpiar()
   }
 }

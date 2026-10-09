@@ -138,10 +138,12 @@ export class WompiClient {
     return ((await res.json()) as { data: WompiTransaction }).data
   }
 
-  async getTransaction(id: string): Promise<WompiTransaction> {
-    const res = await this.fetchWompi(`${this.baseUrl}/transactions/${id}`, {
-      headers: { Authorization: `Bearer ${this.config.privateKey}` },
-    })
+  async getTransaction(id: string, plazo?: AbortSignal): Promise<WompiTransaction> {
+    const res = await this.fetchWompi(
+      `${this.baseUrl}/transactions/${id}`,
+      { headers: { Authorization: `Bearer ${this.config.privateKey}` } },
+      plazo,
+    )
     if (!res.ok) throw new Error(`Wompi ${res.status}`)
     return ((await res.json()) as { data: WompiTransaction }).data
   }
@@ -231,11 +233,12 @@ export class WompiClient {
     return ((await res.json()) as { data: WompiRefund }).data
   }
 
-  async voidTransaction(id: string): Promise<void> {
-    const res = await this.fetchWompi(`${this.baseUrl}/transactions/${id}/void`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${this.config.privateKey}` },
-    })
+  async voidTransaction(id: string, plazo?: AbortSignal): Promise<void> {
+    const res = await this.fetchWompi(
+      `${this.baseUrl}/transactions/${id}/void`,
+      { method: 'POST', headers: { Authorization: `Bearer ${this.config.privateKey}` } },
+      plazo,
+    )
     if (!res.ok) throw new Error(`Wompi void ${res.status}`)
   }
 }
