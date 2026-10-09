@@ -141,7 +141,11 @@ function montarRed(cuelga: RegExp) {
     'fetch',
     vi.fn((url: string, init: RequestInit = {}) => {
       if (cuelga.test(url)) {
-        return new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(init.signal!.reason)))
+        // Como el fetch real: con la señal ya abortada rechaza al instante (un listener tardío no dispararía).
+        return new Promise((_res, rej) => {
+          if (init.signal?.aborted) return rej(init.signal.reason)
+          init.signal?.addEventListener('abort', () => rej(init.signal!.reason))
+        })
       }
       const metodo = init.method ?? 'GET'
       const ok = OK.find(([re, m]) => re.test(url) && m === metodo)
