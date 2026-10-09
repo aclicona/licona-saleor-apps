@@ -23,6 +23,8 @@ import { shippingListMethodsHandler } from './shipping-list-methods.js'
 type Handler = (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>
 
 const JWKS_PEOR_CASO_MS = 5_000
+/** Firma lenta (B-1105): el handler no añade tiempo propio a la verificación, así que no se suma nada. */
+const FIRMA_LENTA_MS = 12_000
 
 const HANDLERS: Record<string, Handler> = { shippingListMethodsHandler }
 
@@ -43,7 +45,8 @@ const registrados: Record<string, string> = Object.fromEntries(
   [...indexTs.matchAll(/app\.post\(\s*'(\/api\/webhooks\/[^']+)'[^)]*?(\w+)\s*\)/g)].map((m) => [m[1], m[2]]),
 )
 
-async function respondeAlMs(handler: Handler, body: Record<string, unknown>): Promise<number> {
+async function respondeAlMs(handler: Handler, body: Record<string, unknown>, firmaMs = JWKS_PEOR_CASO_MS): Promise<number> {
+  vi.mocked(verifySaleorWebhook).mockImplementation(() => new Promise<void>((res) => setTimeout(res, firmaMs)) as never)
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
   log.child.mockReturnValue(log)
   const req = { rawBody: '{}', body, headers: {}, log } as unknown as FastifyRequest
@@ -95,6 +98,9 @@ describe('contrato «los webhooks síncronos responden dentro del plazo» (B-108
   for (const [ruta, entrada] of Object.entries(TABLA)) {
     const excepcion = EXCEPCIONES[ruta]
     if (!excepcion) {
+      it(`${ruta} -> con la firma/JWKS lenta (${FIRMA_LENTA_MS} ms) responde dentro de ${PLAZO_WEBHOOK_SINCRONO_MS} ms (B-1105)`, async () => {
+        expect(await respondeAlMs(HANDLERS[entrada.handler], entrada.body, FIRMA_LENTA_MS)).toBeLessThanOrEqual(PLAZO_WEBHOOK_SINCRONO_MS)
+      })
       it(`${ruta} -> responde dentro de ${PLAZO_WEBHOOK_SINCRONO_MS} ms con la firma en su peor caso`, async () => {
         expect(await respondeAlMs(HANDLERS[entrada.handler], entrada.body)).toBeLessThanOrEqual(PLAZO_WEBHOOK_SINCRONO_MS)
       })

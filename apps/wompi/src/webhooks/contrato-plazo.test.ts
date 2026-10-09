@@ -35,6 +35,14 @@ type Handler = (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>
 const JWKS_PEOR_CASO_MS = 5_000
 /** Saleor corta a los 18 s: el contrato exige 15 s (el plazo) y deja ese margen. */
 const SALEOR_ESPERA_MS = 18_000
+/**
+ * Firma LENTA (B-1105): jose acota la descarga del JWKS a 5 s hasta el primer byte, pero ese tope es el
+ * default de la librería y no cubre un cuerpo que gotea. El contrato no debe depender de ello: aunque la
+ * verificación tarde 12 s (o casi todo el plazo), la respuesta sigue saliendo dentro de los 15 s porque el
+ * plazo cuenta desde la llegada y lo posterior solo dispone de lo que queda.
+ */
+const FIRMA_LENTA_MS = 12_000
+const FIRMA_CASI_TODO_EL_PLAZO_MS = 14_900
 
 /** Un escenario: qué petición a Wompi se cuelga (nunca responde) y si lo creado allí pudo existir ya. */
 interface Escenario {
@@ -189,7 +197,13 @@ async function medir(handler: Handler, body: Record<string, unknown>): Promise<M
 }
 
 /** Motivos por los que el handler rompe el contrato (vacío = lo cumple). */
-async function violacionesDePlazo(handler: Handler, body: Record<string, unknown>, esc: Escenario): Promise<string[]> {
+async function violacionesDePlazo(
+  handler: Handler,
+  body: Record<string, unknown>,
+  esc: Escenario,
+  firmaMs: number = JWKS_PEOR_CASO_MS,
+): Promise<string[]> {
+  vi.mocked(verifySaleorWebhook).mockImplementation(() => new Promise<void>((res) => setTimeout(res, firmaMs)) as never)
   montarRed(esc.cuelga)
   const m = await medir(handler, body)
   const out: string[] = []
@@ -279,6 +293,19 @@ describe('contrato «los webhooks síncronos responden dentro del plazo» (B-108
   }
 })
 
+describe('firma/JWKS lento: el plazo cuenta desde la llegada, no desde que termina la verificación (B-1105)', () => {
+  for (const firmaMs of [FIRMA_LENTA_MS, FIRMA_CASI_TODO_EL_PLAZO_MS]) {
+    for (const [ruta, entrada] of Object.entries(TABLA)) {
+      if (EXCEPCIONES[ruta]) continue
+      for (const esc of escenariosDe(entrada)) {
+        it(`${ruta} [firma ${firmaMs} ms, se cuelga ${esc.cuelga}] -> responde dentro del plazo`, async () => {
+          expect(await violacionesDePlazo(HANDLERS[entrada.handler], entrada.body, esc, firmaMs)).toEqual([])
+        })
+      }
+    }
+  }
+})
+
 describe('el verificador detecta un handler que se pasa del plazo (meta-test)', () => {
   const body = { transaction: TXN, action: ACTION }
   const esc: Escenario = { cuelga: /\/transactions\//, puedeExistirEnWompi: true }
@@ -294,6 +321,25 @@ describe('el verificador detecta un handler que se pasa del plazo (meta-test)', 
     const v = await violacionesDePlazo(dosLlamadasSinPlazo, body, esc)
     expect(v.join(' ')).toMatch(/respondió a los 35000 ms/)
     expect(v.join(' ')).toMatch(/Saleor ya habría dado por fallida/)
+  })
+
+  it('un plazo que arranca DESPUÉS de verificar la firma rompe el contrato con una firma lenta (B-1105)', async () => {
+    const plazoTardio: Handler = async (_req, reply) => {
+      await vi.mocked(verifySaleorWebhook)('{}', '', '')
+      const { crearPlazo } = await import('@licona/webhook-utils')
+      const plazo = crearPlazo()
+      try {
+        const cliente = wompiClient() as unknown as { getTransaction: (id: string, p?: AbortSignal) => Promise<unknown> }
+        await cliente.getTransaction('x', plazo.signal)
+        return reply.send({ result: 'CHARGE_SUCCESS' })
+      } catch {
+        return reply.send({ pspReference: 'x' })
+      } finally {
+        plazo.limpiar()
+      }
+    }
+    const v = await violacionesDePlazo(plazoTardio, body, esc, FIRMA_LENTA_MS)
+    expect(v.join(' ')).toMatch(/respondió a los 27000 ms/)
   })
 
   it('un handler que responde FAILURE final con estado desconocido rompe el contrato', async () => {

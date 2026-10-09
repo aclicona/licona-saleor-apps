@@ -10,6 +10,11 @@
  * Uso en un handler síncrono: `const plazo = crearPlazo()` en la PRIMERA línea (el reloj cuenta desde la
  * llegada de la petición), pasar `plazo.signal` a cada llamada externa y `plazo.limpiar()` en un `finally`.
  * `contrato-plazo.test.ts` (en cada app) falla si un handler síncrono no lo respeta.
+ *
+ * Sobre el supuesto de «hasta 5 s» de la firma (B-1105): lo pone `jose` por defecto (`timeoutDuration`
+ * de `createRemoteJWKSet`, hasta el primer byte), y `jwks-timeout.test.ts` lo ata a la realidad. Aun así
+ * el contrato no depende de él: como el plazo arranca ANTES de verificar y las llamadas posteriores solo
+ * disponen de lo que queda, una firma lenta (12 s en el test) no empuja la respuesta más allá de los 15 s.
  */
 export const PLAZO_WEBHOOK_SINCRONO_MS = 15_000
 
