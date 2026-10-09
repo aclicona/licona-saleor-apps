@@ -12,7 +12,13 @@
  * Criterio de fechas: la conciliación compara `created_at` como epoch ms (`Date.parse`), nunca como string
  * (`refunds-embebidos.ts`). El contrato prueba exactamente eso: mismo `Date.parse`, no mismo texto. Una diferencia
  * solo de formato (`.345Z` vs `.345000Z`) NO rompe la conciliación y por tanto no es rojo.
+ *
+ * B-1121: `transaction-initialize` (B-1095) depende además de dos supuestos medidos en sandbox el 2026-10-09:
+ *   4. `GET /transactions?reference=<ref>` FILTRA (propia -> 1, inexistente -> 0).
+ *   5. Repetir una referencia da `422 {"error":{"messages":{"reference":[...]}}}` (lo que reconoce `esReferenciaDuplicada`).
+ * Se evalúan en `evaluarReferencia`; el script usa el `WompiClient` real, así que se prueba el código de producción.
  */
+import { esReferenciaDuplicada } from './wompi-error.js'
 
 export type EstadoContrato = 'verde' | 'rojo' | 'sin_medida'
 
@@ -110,4 +116,63 @@ export function evaluarContrato(obs: ObservacionContrato): ResultadoContrato {
   })
 
   return { estado: causas.length ? 'rojo' : 'verde', causas }
+}
+
+/** Fila de transacción devuelta por la búsqueda por referencia (ya pasada por el refiltro del cliente). */
+export interface FilaBusqueda {
+  id: string
+  reference: string
+}
+
+/**
+ * Resultado de una búsqueda por referencia. `cliente` es lo que devuelve `WompiClient.findTransactionsByReference`
+ * (con refiltro exacto); `crudasTotal`/`crudasAjenas` salen de la respuesta SIN refiltrar: el refiltro taparía un
+ * filtro ignorado por Wompi mientras la propia siga en la primera página, y justo eso hay que vigilar.
+ */
+export interface BusquedaObservada {
+  cliente: FilaBusqueda[]
+  crudasTotal: number
+  crudasAjenas: number
+}
+
+export interface ObservacionReferencia {
+  noMedible?: string
+  referencia?: string
+  /** id de la transacción creada con `referencia`. */
+  txId?: string
+  /** Segundo `createTransaction` con la MISMA referencia: `creada: true` si Wompi lo aceptó; si no, el error lanzado. */
+  repeticion?: { creada: boolean; error?: unknown }
+  busquedaPropia?: BusquedaObservada
+  busquedaInexistente?: BusquedaObservada
+}
+
+function evaluarBusqueda(nombre: 'propia' | 'inexistente', b: BusquedaObservada, esperadas: number, txId?: string): string[] {
+  const causas: string[] = []
+  if (b.crudasAjenas > 0) causas.push(`busqueda_${nombre}_filtro_ignorado(crudas ${b.crudasTotal}, ajenas ${b.crudasAjenas})`)
+  if (b.cliente.length !== esperadas) causas.push(`busqueda_${nombre}_n=${b.cliente.length}`)
+  else if (txId !== undefined && b.cliente.some((f) => f.id !== txId)) causas.push(`busqueda_${nombre}_id_ajeno`)
+  return causas
+}
+
+export function evaluarReferencia(obs: ObservacionReferencia): ResultadoContrato {
+  if (obs.noMedible) return { estado: 'sin_medida', causas: [obs.noMedible] }
+  if (!obs.repeticion || !obs.busquedaPropia || !obs.busquedaInexistente) {
+    return { estado: 'sin_medida', causas: ['observacion_referencia_incompleta'] }
+  }
+  const causas: string[] = []
+  // (5) El rechazo de la referencia repetida debe seguir teniendo la forma que detecta producción.
+  if (obs.repeticion.creada) causas.push('repeticion_aceptada')
+  else if (!esReferenciaDuplicada(obs.repeticion.error)) causas.push('repeticion_no_es_referencia_duplicada')
+  // (4) La búsqueda por referencia filtra de verdad.
+  causas.push(...evaluarBusqueda('propia', obs.busquedaPropia, 1, obs.txId))
+  causas.push(...evaluarBusqueda('inexistente', obs.busquedaInexistente, 0))
+  return { estado: causas.length ? 'rojo' : 'verde', causas }
+}
+
+/** Une veredictos independientes: rojo gana a sin_medida, y sin_medida a verde. Las causas se concatenan. */
+export function combinarResultados(resultados: readonly ResultadoContrato[]): ResultadoContrato {
+  const causas = (e: EstadoContrato) => resultados.filter((r) => r.estado === e).flatMap((r) => r.causas)
+  if (resultados.some((r) => r.estado === 'rojo')) return { estado: 'rojo', causas: causas('rojo') }
+  if (resultados.some((r) => r.estado === 'sin_medida')) return { estado: 'sin_medida', causas: causas('sin_medida') }
+  return { estado: 'verde', causas: [] }
 }

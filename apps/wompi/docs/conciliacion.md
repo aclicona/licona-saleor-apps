@@ -121,6 +121,16 @@ parciales de 10.000 COP, espera unos segundos y lee):
 3. `GET /refunds?transaction_id=` y `GET /transactions/{id}/refunds` siguen respondiendo 404. Si dejan de hacerlo, la
    causa `listado_disponible:<ruta>:<http>` avisa de que ya se podría excluir por id (rojo para que alguien lo mire).
 
+**Referencia de `transaction-initialize` (B-1121, vigila lo que B-1095 midió el 2026-10-09).** Segunda prueba,
+independiente de la anterior (crea otra transacción de 50.000 COP con referencia nueva `b1121-<uuid>`); el veredicto
+final combina ambas (rojo gana a `sin_medida`, y esta a verde):
+4. `GET /transactions?reference=<ref>` FILTRA: usando `WompiClient.findTransactionsByReference` real devuelve
+   exactamente la propia (1, mismo id) y 0 para una referencia inexistente aleatoria. Además se mira la respuesta
+   CRUDA sin refiltrar: si trae filas de otras referencias, causa `busqueda_<propia|inexistente>_filtro_ignorado`
+   (el refiltro exacto del cliente taparía ese cambio mientras la propia siga en la primera página).
+5. Repetir la creación con la misma referencia da un error que cumple `esReferenciaDuplicada` (422 con
+   `error.messages.reference`). Causas: `repeticion_aceptada`, `repeticion_no_es_referencia_duplicada`.
+
 **Cómo correrla** (desde `apps/wompi`, con `.env` de sandbox):
 
 ```sh

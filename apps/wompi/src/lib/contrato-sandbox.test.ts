@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { evaluarContrato, motivoLlavesNoSandbox, type ObservacionContrato } from './contrato-sandbox.js'
+import {
+  combinarResultados,
+  evaluarContrato,
+  evaluarReferencia,
+  motivoLlavesNoSandbox,
+  type ObservacionContrato,
+  type ObservacionReferencia,
+  type ResultadoContrato,
+} from './contrato-sandbox.js'
+import { WompiHttpError } from './wompi-error.js'
 
 const T1 = '2026-10-09T06:23:16.472Z'
 const T2 = '2026-10-09T06:23:20.768Z'
@@ -98,5 +107,104 @@ describe('motivoLlavesNoSandbox', () => {
     expect(motivoLlavesNoSandbox('prv_test_x', 'pub_prod_y')).toBe('llave_publica_no_sandbox')
     expect(motivoLlavesNoSandbox(undefined, 'pub_test_y')).toBe('llaves_ausentes')
     expect(motivoLlavesNoSandbox('prv_test_x', '')).toBe('llaves_ausentes')
+  })
+})
+
+const REF = 'b1121-abc12345'
+const err422Ref = () =>
+  new WompiHttpError('Wompi 422', 422, { error: { type: 'INPUT_VALIDATION_ERROR', messages: { reference: ['ya usada'] } } })
+
+const baseRef = (): ObservacionReferencia => ({
+  referencia: REF,
+  txId: 'tx-1',
+  repeticion: { creada: false, error: err422Ref() },
+  busquedaPropia: { cliente: [{ id: 'tx-1', reference: REF }], crudasTotal: 1, crudasAjenas: 0 },
+  busquedaInexistente: { cliente: [], crudasTotal: 0, crudasAjenas: 0 },
+})
+
+describe('evaluarReferencia (B-1121)', () => {
+  it('verde cuando el 422 cumple esReferenciaDuplicada y la busqueda filtra (1 propia, 0 inexistente)', () => {
+    expect(evaluarReferencia(baseRef())).toEqual({ estado: 'verde', causas: [] })
+  })
+
+  it('rojo si repetir la referencia ya no se rechaza', () => {
+    const r = evaluarReferencia({ ...baseRef(), repeticion: { creada: true } })
+    expect(r.estado).toBe('rojo')
+    expect(r.causas).toContain('repeticion_aceptada')
+  })
+
+  it('rojo si el 422 cambia de forma (messages.reference ausente)', () => {
+    const otro = new WompiHttpError('x', 422, { error: { type: 'INPUT_VALIDATION_ERROR', messages: { signature: ['mal'] } } })
+    const r = evaluarReferencia({ ...baseRef(), repeticion: { creada: false, error: otro } })
+    expect(r.estado).toBe('rojo')
+    expect(r.causas).toContain('repeticion_no_es_referencia_duplicada')
+  })
+
+  it('rojo si la repeticion falla con otro status', () => {
+    const r = evaluarReferencia({ ...baseRef(), repeticion: { creada: false, error: new WompiHttpError('x', 400, {}) } })
+    expect(r.causas).toContain('repeticion_no_es_referencia_duplicada')
+  })
+
+  it.each([0, 2])('rojo si la busqueda propia devuelve %i filas', (n) => {
+    const cliente = Array.from({ length: n }, () => ({ id: 'tx-1', reference: REF }))
+    const r = evaluarReferencia({ ...baseRef(), busquedaPropia: { cliente, crudasTotal: n, crudasAjenas: 0 } })
+    expect(r.estado).toBe('rojo')
+    expect(r.causas).toContain(`busqueda_propia_n=${n}`)
+  })
+
+  it('rojo si la busqueda propia devuelve un id ajeno', () => {
+    const r = evaluarReferencia({
+      ...baseRef(),
+      busquedaPropia: { cliente: [{ id: 'otra', reference: REF }], crudasTotal: 1, crudasAjenas: 0 },
+    })
+    expect(r.causas).toContain('busqueda_propia_id_ajeno')
+  })
+
+  it('rojo si Wompi ignora el filtro: la respuesta cruda trae filas de otras referencias (el refiltro lo taparia)', () => {
+    const r = evaluarReferencia({
+      ...baseRef(),
+      busquedaPropia: { cliente: [{ id: 'tx-1', reference: REF }], crudasTotal: 20, crudasAjenas: 19 },
+    })
+    expect(r.estado).toBe('rojo')
+    expect(r.causas).toContain('busqueda_propia_filtro_ignorado(crudas 20, ajenas 19)')
+  })
+
+  it('rojo si la busqueda de una referencia inexistente devuelve algo', () => {
+    const r = evaluarReferencia({
+      ...baseRef(),
+      busquedaInexistente: { cliente: [], crudasTotal: 20, crudasAjenas: 20 },
+    })
+    expect(r.estado).toBe('rojo')
+    expect(r.causas).toContain('busqueda_inexistente_filtro_ignorado(crudas 20, ajenas 20)')
+  })
+
+  it('rojo si la inexistente devuelve filas tras el refiltro', () => {
+    const r = evaluarReferencia({
+      ...baseRef(),
+      busquedaInexistente: { cliente: [{ id: 'x', reference: 'q' }], crudasTotal: 1, crudasAjenas: 0 },
+    })
+    expect(r.causas).toContain('busqueda_inexistente_n=1')
+  })
+
+  it('sin_medida si no se pudo medir', () => {
+    expect(evaluarReferencia({ noMedible: 'tx_no_creada(http 500)' })).toEqual({
+      estado: 'sin_medida',
+      causas: ['tx_no_creada(http 500)'],
+    })
+  })
+})
+
+describe('combinarResultados', () => {
+  const v: ResultadoContrato = { estado: 'verde', causas: [] }
+  const rojo: ResultadoContrato = { estado: 'rojo', causas: ['a'] }
+  const sm: ResultadoContrato = { estado: 'sin_medida', causas: ['b'] }
+  it('verde solo si todos son verdes', () => {
+    expect(combinarResultados([v, v])).toEqual({ estado: 'verde', causas: [] })
+  })
+  it('rojo gana a sin_medida y junta causas', () => {
+    expect(combinarResultados([sm, rojo])).toEqual({ estado: 'rojo', causas: ['a'] })
+  })
+  it('sin_medida si no hay rojo pero algo no se midio', () => {
+    expect(combinarResultados([v, sm])).toEqual({ estado: 'sin_medida', causas: ['b'] })
   })
 })
