@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { crearPlazo, PLAZO_WEBHOOK_SINCRONO_MS, webhooksSincronos } from './plazo.js'
 
-beforeEach(() => vi.useFakeTimers())
-afterEach(() => vi.useRealTimers())
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('crearPlazo', () => {
   it('por defecto dura 15 s, bajo los 18 s de Saleor', () => {
