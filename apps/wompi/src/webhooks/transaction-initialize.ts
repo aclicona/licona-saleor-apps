@@ -1,6 +1,6 @@
 import { accionesParaResultado } from '../lib/acciones.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
+import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
@@ -45,7 +45,7 @@ interface TransactionInitializePayload {
 
 export async function transactionInitializeHandler(req: FastifyRequest, reply: FastifyReply) {
   // El plazo global cuenta desde la llegada de la petición (B-1078): Saleor ya está contando sus 18 s.
-  const inicio = Date.now()
+  const plazo = crearPlazo(PLAZO_GLOBAL_MS, 'Plazo global del inicio agotado')
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
   // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
   // de verificar la firma para que también quede constancia de lo que se rechaza.
@@ -88,13 +88,8 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: tarjeta.message })
   }
 
-  // Una sola señal para token + creación. Se crea tras los return tempranos (no dejan temporizador vivo)
-  // y se limpia en `finally`.
-  const plazo = new AbortController()
-  const temporizador = setTimeout(
-    () => plazo.abort(new Error('Plazo global del inicio agotado')),
-    Math.max(0, PLAZO_GLOBAL_MS - (Date.now() - inicio)),
-  )
+  // Una sola señal (`plazo.signal`) para token + creación. El temporizador nace al leerla (los return
+  // tempranos no dejan nada vivo) y se limpia en `finally`.
   // 'token': aún no existe nada en Wompi. 'crear': la transacción pudo crearse aunque la respuesta no llegue.
   let fase: 'token' | 'crear' = 'token'
 
@@ -188,6 +183,6 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       message: MENSAJE_DESCONOCIDO,
     })
   } finally {
-    clearTimeout(temporizador)
+    plazo.limpiar()
   }
 }

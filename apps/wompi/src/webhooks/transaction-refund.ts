@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
+import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
@@ -25,8 +25,7 @@ const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de reembolso'
 export async function transactionRefundHandler(req: FastifyRequest, reply: FastifyReply) {
   // El plazo global cuenta desde la llegada de la petición: Saleor ya está contando sus 18 s, y la
   // descarga del JWKS al verificar la firma (timeout de jose: 5 s) también consume ese margen.
-  const inicio = Date.now()
-  const restanteMs = () => PLAZO_GLOBAL_MS - (Date.now() - inicio)
+  const plazo = crearPlazo(PLAZO_GLOBAL_MS, 'Plazo global del reembolso agotado')
   // Logger de la petición con las claves canónicas ya puestas: todo lo que se
   // escriba a partir de aquí las lleva sin repetirlas a mano. Se construye ANTES
   // de verificar la firma para que también quede constancia de lo que se rechaza.
@@ -52,18 +51,13 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
   // Id del reembolso en Wompi, en cuanto se conoce: si algo falla después, el
   // reembolso YA existe y ese id es el pspReference de la respuesta no final.
   let refundId: string | undefined
-  // Una sola señal para todas las llamadas a Wompi: cada una usa, de hecho, el tiempo restante.
-  // Se crea tras verificar la firma (los return tempranos de arriba no dejan temporizador); el
-  // `finally` de abajo lo limpia en todos los caminos posteriores.
-  const plazo = new AbortController()
-  const temporizador = setTimeout(
-    () => plazo.abort(new Error('Plazo global del reembolso agotado')),
-    Math.max(0, restanteMs()),
-  )
+  // Una sola señal (`plazo.signal`) para todas las llamadas a Wompi: cada una usa, de hecho, el tiempo
+  // restante. El temporizador nace al leerla por primera vez (los return tempranos de arriba no dejan
+  // nada vivo) y el `finally` de abajo lo limpia en todos los caminos posteriores.
   try {
     // Si la verificación ya consumió todo el plazo NO se llama a Wompi: antes de crear no hay nada creado,
     // y se responde por el camino no final de B-1071 (sin `result`, referencia sin-id), nunca REFUND_FAILURE.
-    if (restanteMs() <= 0) throw new Error('Plazo global agotado antes de crear el reembolso')
+    if (plazo.restanteMs() <= 0) throw new Error('Plazo global agotado antes de crear el reembolso')
     const cliente = wompiClient()
     let refund = await cliente.refundTransaction(transaction.pspReference, copToCents(action.amount), plazo.signal)
     // Una respuesta sin `id` es id desconocido, no la cadena "undefined".
@@ -76,8 +70,8 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // espera de respuesta: WEBHOOK_WAITING_FOR_RESPONSE_TIMEOUT).
     for (let i = 0; i < MAX_SONDEOS && refund.status === 'PENDING'; i++) {
       // Sin tiempo para esperar y sondear dentro del plazo: se omite y se responde no final con el id ya conocido.
-      if (restanteMs() <= INTERVALO_SONDEO_MS) {
-        log.warn({ refundId, restanteMs: restanteMs() }, 'Plazo global casi agotado: se omite el sondeo del reembolso')
+      if (plazo.restanteMs() <= INTERVALO_SONDEO_MS) {
+        log.warn({ refundId, restanteMs: plazo.restanteMs() }, 'Plazo global casi agotado: se omite el sondeo del reembolso')
         break
       }
       await new Promise((r) => setTimeout(r, INTERVALO_SONDEO_MS))
@@ -129,6 +123,6 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     )
     return reply.send({ pspReference: refundId ?? `${transaction.pspReference}${SEPARADOR_REEMBOLSO_SIN_ID}${randomUUID()}` })
   } finally {
-    clearTimeout(temporizador)
+    plazo.limpiar()
   }
 }
