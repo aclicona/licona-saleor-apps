@@ -6,6 +6,7 @@ import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { esRechazoDefinitivo } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
+import { SEPARADOR_REEMBOLSO_SIN_ID } from '../lib/referencia-reembolso.js'
 
 interface TransactionRefundPayload {
   transaction: { id: string; pspReference: string }
@@ -126,7 +127,7 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
       { err: error, refundId, amount: action.amount },
       'Estado del reembolso en Wompi desconocido; se responde sin resultado final (REFUND_REQUEST) para no cerrarlo como fallido',
     )
-    return reply.send({ pspReference: refundId ?? `${transaction.pspReference}:reembolso-sin-id:${randomUUID()}` })
+    return reply.send({ pspReference: refundId ?? `${transaction.pspReference}${SEPARADOR_REEMBOLSO_SIN_ID}${randomUUID()}` })
   } finally {
     clearTimeout(temporizador)
   }

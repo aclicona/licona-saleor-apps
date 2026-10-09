@@ -21,7 +21,7 @@ import {
   type ProgramadorConciliacion,
 } from './lib/conciliacion-periodica.js'
 import { wompiClient } from './lib/wompi-client.js'
-import { politicaAnulaciones } from './lib/conciliacion-solicitudes.js'
+import { politicaAnulaciones, politicaReembolsos } from './lib/conciliacion-solicitudes.js'
 import { listarTransaccionesConSolicitud, reportTransactionEvent } from './lib/saleor-client.js'
 import { wompiIncomingHandler } from './webhooks/wompi-incoming.js'
 import { appRegistrada, mensajeModoDegradado, verificarConfiguracionAlArranque } from './lib/config.js'
@@ -134,7 +134,8 @@ if (conciliacionHabilitada()) {
   const wompi = { listarTransacciones: (v: VentanaConsulta) => cliente.listTransactions(v.desde, v.hasta) }
   const saleor = { reportar: reportTransactionEvent }
   const anulaciones = { saleorLector: { listarTransaccionesConSolicitud }, politica: politicaAnulaciones(cliente) }
-  app.post('/api/conciliacion/ejecutar', soloRegistrada, crearHandlerConciliacion({ wompi, saleor, anulaciones }))
+  const reembolsos = { saleorLector: { listarTransaccionesConSolicitud }, politica: politicaReembolsos(cliente) }
+  app.post('/api/conciliacion/ejecutar', soloRegistrada, crearHandlerConciliacion({ wompi, saleor, anulaciones, reembolsos }))
   app.log.warn('Conciliación Wompi HABILITADA: POST /api/conciliacion/ejecutar disponible con token')
 
   const { minutos, aviso } = intervaloDeConciliacion()
@@ -158,7 +159,7 @@ if (conciliacionHabilitada()) {
     const logTimer = app.log.child({ webhook: 'conciliacion', disparador: 'timer' })
     arrancarConciliacionPeriodica = () => {
       programadorConciliacion = programarConciliacionPeriodica({
-        conciliar: (v) => conciliarTransaccionesWompi({ wompi, saleor, anulaciones, ventana: v, log: logTimer }),
+        conciliar: (v) => conciliarTransaccionesWompi({ wompi, saleor, anulaciones, reembolsos, ventana: v, log: logTimer }),
         ventana: () => ventanaDeConciliacion(),
         registrada: () => appRegistrada(),
         intervaloMs: minutos * 60_000,

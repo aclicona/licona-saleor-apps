@@ -11,6 +11,7 @@ import { wompiClient } from '../lib/wompi-client.js'
 import { verifySaleorWebhook } from '@licona/webhook-utils'
 import { transactionRefundHandler, PLAZO_GLOBAL_MS } from './transaction-refund.js'
 import { WompiHttpError } from '../lib/wompi-error.js'
+import { SEPARADOR_REEMBOLSO_SIN_ID, esReferenciaSinId } from '../lib/referencia-reembolso.js'
 
 const refundTransaction = vi.fn()
 const getRefund = vi.fn()
@@ -60,6 +61,12 @@ afterEach(() => {
 })
 
 const PREFIJO_SIN_ID = /^12084641-1791286722-99200:reembolso-sin-id:[0-9a-f-]{36}$/
+
+// El separador es compartido con la conciliación (B-1077): si cambia en un solo sitio, esto falla.
+it('la referencia sin-id usa el separador compartido que reconoce la conciliación', () => {
+  expect(SEPARADOR_REEMBOLSO_SIN_ID).toBe(':reembolso-sin-id:')
+  expect(esReferenciaSinId(`12084641-1791286722-99200${SEPARADOR_REEMBOLSO_SIN_ID}x`)).toBe(true)
+})
 
 describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => {
   it('crea el reembolso con el id de Wompi y el importe en centavos', async () => {
@@ -125,6 +132,7 @@ describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => 
     const { payload, log } = await correr()
     expect(Object.keys(payload)).toEqual(['pspReference'])
     expect(payload.pspReference).toMatch(PREFIJO_SIN_ID)
+    expect(esReferenciaSinId(payload.pspReference as string)).toBe(true)
     expect(JSON.stringify(payload)).not.toContain('secreto-interno')
     expect(log.error).toHaveBeenCalled()
   })

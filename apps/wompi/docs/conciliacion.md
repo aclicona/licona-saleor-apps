@@ -50,6 +50,17 @@ Tras el bucle de transacciones, la misma corrida cierra las **anulaciones que qu
 - **Límites:** un request más viejo que la ventana no se ve; se leen como máximo 5 páginas de 50 (hay `warn` al
   llegar al tope). Idempotente: al cerrarse deja de ser candidata y un duplicado da `alreadyProcessed`.
 
+### Reembolsos pendientes (B-1077)
+
+Mismo motor, tras las anulaciones y antes del log final: cierra los `REFUND_REQUEST` que quedaron abiertos
+(`transaction-refund` respondió sin `result`). Consulta `GET /refunds/{psp}` (`politicaReembolsos`) y reporta
+`REFUND_SUCCESS` (`APPROVED`) o `REFUND_FAILURE` (`DECLINED`/`ERROR`/`VOIDED`); `PENDING` espera 60 min
+(`MARGEN_REEMBOLSO_PENDIENTE_MIN`) y después queda para revisión humana, nunca como fallo. Resumen en la clave
+opcional `reembolsos` (misma forma que `anulaciones`); un `errorApi` de anulaciones no impide que corran.
+
+- **Sin id:** un request con psp `...:reembolso-sin-id:...` no se consulta (no hay id); queda en `log.error`
+  (`estadoWompi: SIN_ID`) para revisión humana. No se inventó un endpoint de listado: pendiente de confirmar uno.
+
 ## Decisiones pendientes (Andrés)
 
 | Tema | Opciones | Recomendación |
@@ -59,6 +70,8 @@ Tras el bucle de transacciones, la misma corrida cierra las **anulaciones que qu
 | Credenciales | llave privada Wompi ya existente / llave de solo lectura (si Wompi la ofrece) + token propio del endpoint | reutilizar la privada; token del endpoint distinto, rotado desde el aprovisionamiento |
 | Disparador | **Decidido** (B-412, Andrés 2026-10-07 + ruling de Fable): temporizador en proceso dentro de app-wompi, sin servicio nuevo; corre solo mientras el servicio está vivo | — |
 | Margen de anulaciones pendientes (B-1083) | 15 / 60 / 240 min | hoy 60 (`MARGEN_ANULACION_PENDIENTE_MIN`). Seguro: un `VOIDED` tardío tras un `CANCEL_FAILURE` sigue des-pagando con `CHARGE_FAILURE` |
+| Margen de reembolsos pendientes (B-1077) | 15 / 60 / 240 min | hoy 60 (`MARGEN_REEMBOLSO_PENDIENTE_MIN`). Vencido no cierra como fallo: pasa a revisión humana |
+| Reembolsos sin id (B-1077) | confirmar con Wompi un endpoint de listado de reembolsos por transacción / seguir en revisión humana | hoy revisión humana; sin endpoint confirmado no se automatiza |
 | `availableActions` tras `CANCEL_FAILURE` | `[]` / `['REFUND']` | hoy `[]`: deja Refund apagado. ¿`['REFUND']`? |
 
 ## Pendiente de verificación humana

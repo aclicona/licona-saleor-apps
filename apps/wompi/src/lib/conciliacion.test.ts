@@ -10,7 +10,7 @@ import {
   type ReportadorSaleor,
   type TransaccionConciliable,
 } from './conciliacion.js'
-import { politicaAnulaciones } from './conciliacion-solicitudes.js'
+import { politicaAnulaciones, politicaReembolsos } from './conciliacion-solicitudes.js'
 
 // Referencia con forma de ID global de Saleor (misma que usa wompi-incoming.test.ts).
 const REF = 'VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzLTgwYzA3NmExNzUzYg=='
@@ -281,5 +281,42 @@ describe('conciliarTransaccionesWompi — paso de anulaciones (B-1083)', () => {
     expect(r.errores).toBe(1)
     expect(anulaciones.saleorLector.listarTransaccionesConSolicitud).toHaveBeenCalledTimes(1)
     expect(r.anulaciones).toBeDefined()
+  })
+})
+
+describe('conciliarTransaccionesWompi — paso de reembolsos (B-1077)', () => {
+  const BASE = ['revisadas', 'yaReportadas', 'reportadas', 'sinMapeo', 'omitidas', 'errores', 'errorApi', 'desde', 'hasta']
+  const vacio = () => ({ saleorLector: { listarTransaccionesConSolicitud: vi.fn().mockResolvedValue([]) } })
+  const reembolsosCableados = () => ({ ...vacio(), politica: politicaReembolsos({ getRefund: vi.fn() }) })
+  const anulacionesCableadas = () => ({ ...vacio(), politica: politicaAnulaciones({ getTransaction: vi.fn() }) })
+
+  it('el log lleva anulaciones y reembolsos; sin cablear reembolsos no aparece esa clave', async () => {
+    const conLog = crearLog()
+    await conciliarTransaccionesWompi({
+      wompi: fuente([]), saleor: saleor(), ventana: VENTANA, log: conLog,
+      anulaciones: anulacionesCableadas(), reembolsos: reembolsosCableados(),
+    })
+    const [campos, mensaje] = conLog.info.mock.calls.at(-1)!
+    expect(mensaje).toBe('Conciliación terminada')
+    expect(Object.keys(campos).sort()).toEqual([...BASE, 'anulaciones', 'reembolsos'].sort())
+    expect(campos.reembolsos).toMatchObject({ candidatas: 0, errorApi: false })
+
+    const soloAnul = crearLog()
+    await conciliarTransaccionesWompi({ wompi: fuente([]), saleor: saleor(), ventana: VENTANA, log: soloAnul, anulaciones: anulacionesCableadas() })
+    expect(Object.keys(soloAnul.info.mock.calls.at(-1)![0]).sort()).toEqual([...BASE, 'anulaciones'].sort())
+  })
+
+  it('corre aunque el paso de anulaciones dé errorApi', async () => {
+    const anulaciones = {
+      saleorLector: { listarTransaccionesConSolicitud: vi.fn().mockRejectedValue(new Error('Saleor caído')) },
+      politica: politicaAnulaciones({ getTransaction: vi.fn() }),
+    }
+    const reembolsos = reembolsosCableados()
+    const r = await conciliarTransaccionesWompi({
+      wompi: fuente([]), saleor: saleor(), ventana: VENTANA, log: crearLog(), anulaciones, reembolsos,
+    })
+    expect(r.anulaciones?.errorApi).toBe(true)
+    expect(reembolsos.saleorLector.listarTransaccionesConSolicitud).toHaveBeenCalledTimes(1)
+    expect(r.reembolsos).toMatchObject({ errorApi: false })
   })
 })

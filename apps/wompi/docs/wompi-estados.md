@@ -129,5 +129,19 @@ plazo global `PLAZO_GLOBAL_MS` = 15 000 ms (margen de ~3 s) que **cuenta desde l
 - Plazo ya agotado por la verificación **antes de crear**: no se llama a Wompi (aún no hay nada creado); sin `result` y `pspReference` sin-id.
 - Si tras crear quedan ≤ 1,5 s de plazo, se omiten la espera y el sondeo y se responde no final con el id conocido.
 
-**Pendiente (B-1077):** el motor `conciliarSolicitudesPendientes` ya existe (B-1083); falta la política de reembolsos
-(`getRefund`, psp `:reembolso-sin-id:`). Hasta entonces un operador debe verificar en Wompi antes de reintentar.
+**Cierre por conciliación (B-1077):** un `REFUND_REQUEST` que quedó pendiente lo cierra la conciliación con
+`GET /refunds/{pspReference}` (`politicaReembolsos`, margen `MARGEN_REEMBOLSO_PENDIENTE_MIN` = 60 min desde el request):
+
+| Estado del reembolso en Wompi | Resultado |
+|---|---|
+| `APPROVED` | `REFUND_SUCCESS`, `message` fijo «Wompi: reembolso confirmado (APPROVED)» |
+| `DECLINED` / `ERROR` / `VOIDED` | `REFUND_FAILURE`, `message` fijo «Wompi no aprobó el reembolso (ESTADO)» (nunca el `status_message` de Wompi, B-1061) |
+| `PENDING` dentro del margen | se espera |
+| `PENDING` vencido, otro estado o `404` | no se decide: `log.error` y revisión humana (un `PENDING` puede aprobarse después; no se cierra como fallo) |
+
+Se reporta con el mismo `pspReference` e importe del request; si el importe de Wompi difiere, `warn`.
+
+**Caso sin id (limitación):** si el request lleva `pspReference` `<psp>:reembolso-sin-id:<uuid>` (no se llegó a
+conocer el id del reembolso), la conciliación NO consulta a Wompi: lo deja en `log.error` (`estadoWompi: SIN_ID`) para
+revisión humana. Queda así hasta confirmar un endpoint de listado de reembolsos por transacción. Un operador debe
+verificar en Wompi antes de reintentar.

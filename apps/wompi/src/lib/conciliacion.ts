@@ -76,6 +76,8 @@ export interface ResultadoConciliacion {
   errorApi: boolean
   /** Cierre de anulaciones pendientes (B-1083). Ausente si no está cableado. */
   anulaciones?: ResultadoSolicitudes
+  /** Cierre de reembolsos pendientes (B-1077). Ausente si no está cableado. */
+  reembolsos?: ResultadoSolicitudes
 }
 
 /** Dependencias opcionales del paso que cierra solicitudes pendientes (B-1083). */
@@ -89,6 +91,7 @@ export async function conciliarTransaccionesWompi(deps: {
   wompi: FuenteTransaccionesWompi
   saleor: ReportadorSaleor
   anulaciones?: DepsSolicitudes
+  reembolsos?: DepsSolicitudes
   ventana: VentanaConsulta
   log: LogConciliacion
 }): Promise<ResultadoConciliacion> {
@@ -168,6 +171,9 @@ export async function conciliarTransaccionesWompi(deps: {
   if (deps.anulaciones) {
     r.anulaciones = await conciliarSolicitudesPendientes({ ...deps.anulaciones, saleor, ventana, log })
   }
+  if (deps.reembolsos) {
+    r.reembolsos = await conciliarSolicitudesPendientes({ ...deps.reembolsos, saleor, ventana, log })
+  }
 
   log.info({ ...r, desde: ventana.desde, hasta: ventana.hasta }, 'Conciliación terminada')
   return r
@@ -230,6 +236,7 @@ export function crearHandlerConciliacion(deps: {
   wompi: FuenteTransaccionesWompi
   saleor: ReportadorSaleor
   anulaciones?: DepsSolicitudes
+  reembolsos?: DepsSolicitudes
 }) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     if (!tokenValido(req.headers.authorization, process.env.WOMPI_CONCILIACION_TOKEN ?? '')) {

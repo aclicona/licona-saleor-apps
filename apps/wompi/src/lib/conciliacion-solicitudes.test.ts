@@ -2,12 +2,14 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   conciliarSolicitudesPendientes,
   politicaAnulaciones,
+  politicaReembolsos,
   solicitudesSinResolver,
   type LectorSolicitudesSaleor,
 } from './conciliacion-solicitudes.js'
 import type { ReportadorSaleor } from './conciliacion.js'
 import type { EventoTransaccionSaleor, TransaccionConSolicitudes } from './saleor-client.js'
-import type { WompiTransaction } from './wompi-client.js'
+import type { WompiRefund, WompiTransaction } from './wompi-client.js'
+import { WompiHttpError } from './wompi-error.js'
 
 const AHORA = new Date('2026-10-08T12:00:00Z')
 const VENTANA = { desde: new Date('2026-10-07T12:00:00Z'), hasta: AHORA }
@@ -175,5 +177,117 @@ describe('conciliarSolicitudesPendientes (anulaciones)', () => {
       saleor: saleor(), politica: politicaAnulaciones(wompi({})), ventana: VENTANA, ahora: AHORA, log,
     })
     expect(log.warn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('tope de páginas'))
+  })
+})
+
+describe('conciliarSolicitudesPendientes (reembolsos, B-1077)', () => {
+  const reqReembolso = (parcial: Partial<EventoTransaccionSaleor> = {}) =>
+    evento({ type: 'REFUND_REQUEST', pspReference: '4567', amount: 50000, ...parcial })
+  const txR = (parcial: Partial<TransaccionConSolicitudes> = {}) =>
+    transaccion({ cancelPendingAmount: 0, refundPendingAmount: 50000, events: [reqReembolso()], ...parcial })
+
+  function wompiR(r: Partial<WompiRefund> | Error) {
+    return {
+      getRefund: vi.fn(async (id: string) => {
+        if (r instanceof Error) throw r
+        return { id, transaction_id: 'tx', status: 'APPROVED', amount_in_cents: 5000000, ...r } as WompiRefund
+      }),
+    }
+  }
+
+  async function correrR(ts: TransaccionConSolicitudes[], w: ReturnType<typeof wompiR>, s = saleor(), log = crearLog()) {
+    const r = await conciliarSolicitudesPendientes({
+      saleorLector: lector(ts), saleor: s, politica: politicaReembolsos(w), ventana: VENTANA, ahora: AHORA, log,
+    })
+    return { r, s, log }
+  }
+
+  it('APPROVED → REFUND_SUCCESS con el psp y el importe del request', async () => {
+    const { r, s, log } = await correrR([txR()], wompiR({ status: 'APPROVED' }))
+    expect(s.reportar).toHaveBeenCalledWith({
+      transactionId: 'T1', type: 'REFUND_SUCCESS', amount: 50000, pspReference: '4567', message: 'Wompi: reembolso confirmado (APPROVED)',
+    })
+    expect(r).toMatchObject({ candidatas: 1, cerradasExito: 1, errores: 0 })
+    expect(log.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['DECLINED', 'ERROR', 'VOIDED'] as const)('%s → REFUND_FAILURE con mensaje fijo, sin status_message de Wompi', async (status) => {
+    const { r, s } = await correrR([txR()], wompiR({ status, status_message: 'texto interno de Wompi' }))
+    expect(s.reportar).toHaveBeenCalledWith({
+      transactionId: 'T1', type: 'REFUND_FAILURE', amount: 50000, pspReference: '4567', message: `Wompi no aprobó el reembolso (${status})`,
+    })
+    expect(JSON.stringify((s.reportar as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('texto interno')
+    expect(r.cerradasFallo).toBe(1)
+  })
+
+  it('PENDING dentro del margen → en espera; vencido → sin decidir (no fallo)', async () => {
+    const dentro = await correrR([txR()], wompiR({ status: 'PENDING' }))
+    expect(dentro.r).toMatchObject({ enEspera: 1, sinDecidir: 0 })
+    expect(dentro.s.reportar).not.toHaveBeenCalled()
+
+    const vencido = txR({ events: [reqReembolso({ createdAt: hace(61) })] })
+    const fuera = await correrR([vencido], wompiR({ status: 'PENDING' }))
+    expect(fuera.r).toMatchObject({ enEspera: 0, sinDecidir: 1, cerradasFallo: 0 })
+    expect(fuera.s.reportar).not.toHaveBeenCalled()
+    expect(fuera.log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: 'PENDING' }), expect.any(String))
+  })
+
+  it('estado desconocido → sin decidir', async () => {
+    const { r, s } = await correrR([txR()], wompiR({ status: 'RARO' }))
+    expect(r.sinDecidir).toBe(1)
+    expect(s.reportar).not.toHaveBeenCalled()
+  })
+
+  it('404 → sin decidir sin contar error; 500 → errores 1', async () => {
+    const a = await correrR([txR()], wompiR(new WompiHttpError('Wompi getRefund 404', 404)))
+    expect(a.r).toMatchObject({ sinDecidir: 1, errores: 0 })
+    expect(a.log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: 'HTTP_404' }), expect.any(String))
+
+    const b = await correrR([txR()], wompiR(new WompiHttpError('Wompi getRefund 500', 500)))
+    expect(b.r).toMatchObject({ errores: 1, sinDecidir: 0 })
+    expect(b.s.reportar).not.toHaveBeenCalled()
+  })
+
+  it('psp sin id → sin decidir (SIN_ID) y no se llama a getRefund', async () => {
+    const w = wompiR({ status: 'APPROVED' })
+    const t = txR({ events: [reqReembolso({ pspReference: 'tx-1:reembolso-sin-id:abc-123' })] })
+    const { r, s, log } = await correrR([t], w)
+    expect(r.sinDecidir).toBe(1)
+    expect(w.getRefund).not.toHaveBeenCalled()
+    expect(s.reportar).not.toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: 'SIN_ID' }), expect.any(String))
+  })
+
+  it('refundPendingAmount 0 → no consulta; con un request ya cerrado solo cierra el abierto', async () => {
+    const w = wompiR({ status: 'APPROVED' })
+    const cero = await correrR([txR({ refundPendingAmount: 0 })], w)
+    expect(cero.r.candidatas).toBe(0)
+    expect(w.getRefund).not.toHaveBeenCalled()
+
+    const t = txR({
+      events: [
+        reqReembolso({ pspReference: '111' }),
+        reqReembolso({ type: 'REFUND_SUCCESS', pspReference: '111' }),
+        reqReembolso({ pspReference: '222' }),
+      ],
+    })
+    const { s } = await correrR([t], w)
+    expect(s.reportar).toHaveBeenCalledTimes(1)
+    expect(s.reportar).toHaveBeenCalledWith(expect.objectContaining({ pspReference: '222', type: 'REFUND_SUCCESS' }))
+  })
+
+  it('importe de Wompi distinto → se reporta con el del request y hay warn', async () => {
+    const { s, log } = await correrR([txR()], wompiR({ status: 'APPROVED', amount_in_cents: 2000000 }))
+    expect(s.reportar).toHaveBeenCalledWith(expect.objectContaining({ amount: 50000 }))
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ importeCop: 50000, importeWompiCop: 20000 }),
+      expect.stringContaining('difiere'),
+    )
+  })
+
+  it('alreadyProcessed → yaCerradas sin warn ni doble conteo', async () => {
+    const { r, log } = await correrR([txR()], wompiR({ status: 'APPROVED' }), saleor({ alreadyProcessed: true }))
+    expect(r).toMatchObject({ yaCerradas: 1, cerradasExito: 0, cerradasFallo: 0 })
+    expect(log.warn).not.toHaveBeenCalled()
   })
 })

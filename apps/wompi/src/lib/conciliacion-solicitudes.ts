@@ -6,7 +6,9 @@ import type {
   TipoSolicitud,
   TransaccionConSolicitudes,
 } from './saleor-client.js'
-import type { WompiTransaction } from './wompi-client.js'
+import { esReferenciaSinId } from './referencia-reembolso.js'
+import { WompiHttpError } from './wompi-error.js'
+import type { WompiRefund, WompiTransaction } from './wompi-client.js'
 
 /**
  * Cierre de solicitudes que quedaron pendientes en Saleor (B-1083; reutilizable por B-1077).
@@ -26,6 +28,9 @@ import type { WompiTransaction } from './wompi-client.js'
 /** Cuánto se espera a que Wompi aplique una anulación (sigue APPROVED) antes de darla por fallida. */
 export const MARGEN_ANULACION_PENDIENTE_MIN = 60
 
+/** Cuánto se espera a que Wompi resuelva un reembolso PENDING antes de dejarlo para revisión humana. */
+export const MARGEN_REEMBOLSO_PENDIENTE_MIN = 60
+
 export interface LectorSolicitudesSaleor {
   /** Lanza si falla el transporte. `alLlegarAlTope` avisa que hubo más páginas de las que se leen. */
   listarTransaccionesConSolicitud(params: {
@@ -37,6 +42,10 @@ export interface LectorSolicitudesSaleor {
 
 export interface ConsultorTransaccionWompi {
   getTransaction(id: string): Promise<WompiTransaction>
+}
+
+export interface ConsultorReembolsoWompi {
+  getRefund(id: string): Promise<WompiRefund>
 }
 
 export interface SolicitudPendiente {
@@ -234,6 +243,56 @@ export function politicaAnulaciones(
       const vencida = ahora.getTime() - s.creadaEn.getTime() > margenMin * 60_000
       if (!vencida) return { tipo: 'esperar', estadoWompi: txn.status }
       return { tipo: 'fallo', mensaje: MENSAJE_ANULACION_FALLO, ...base }
+    },
+  }
+}
+
+const MENSAJE_REEMBOLSO_OK = 'Wompi: reembolso confirmado (APPROVED)'
+const ESTADOS_REEMBOLSO_FALLIDO = new Set(['DECLINED', 'ERROR', 'VOIDED'])
+
+function importeReembolsoCop(r: WompiRefund): number | undefined {
+  try {
+    return centsToCop(r.amount_in_cents)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Política de reembolsos (B-1077). Consulta `GET /refunds/{id}` con el psp del request:
+ * APPROVED → éxito; DECLINED/ERROR/VOIDED → fallo (mensaje fijo, nunca `status_message` de Wompi, B-1061);
+ * PENDING dentro del margen → esperar; PENDING vencido u otro estado → sin decidir (un reembolso PENDING
+ * aún puede aprobarse, así que NO se cierra como fallo). 404 → sin decidir. Un psp sin id
+ * (`:reembolso-sin-id:`) no se consulta: no hay endpoint de listado confirmado, queda en revisión humana.
+ */
+export function politicaReembolsos(
+  wompi: ConsultorReembolsoWompi,
+  margenMin: number = MARGEN_REEMBOLSO_PENDIENTE_MIN,
+): PoliticaSolicitud {
+  return {
+    tipoRequest: 'REFUND_REQUEST',
+    tipoExito: 'REFUND_SUCCESS',
+    tipoFallo: 'REFUND_FAILURE',
+    importePendiente: (t) => t.refundPendingAmount,
+    async decidir(s, ahora) {
+      if (esReferenciaSinId(s.pspReference)) return { tipo: 'sin-decidir', estadoWompi: 'SIN_ID' }
+      let reembolso: WompiRefund
+      try {
+        reembolso = await wompi.getRefund(s.pspReference)
+      } catch (error) {
+        if (error instanceof WompiHttpError && error.status === 404) return { tipo: 'sin-decidir', estadoWompi: 'HTTP_404' }
+        throw error
+      }
+      const estado = String(reembolso.status)
+      const importeWompiCop = importeReembolsoCop(reembolso)
+      if (estado === 'APPROVED') return { tipo: 'exito', estadoWompi: estado, mensaje: MENSAJE_REEMBOLSO_OK, importeWompiCop }
+      if (ESTADOS_REEMBOLSO_FALLIDO.has(estado)) {
+        return { tipo: 'fallo', estadoWompi: estado, mensaje: `Wompi no aprobó el reembolso (${estado})`, importeWompiCop }
+      }
+      if (estado === 'PENDING' && ahora.getTime() - s.creadaEn.getTime() <= margenMin * 60_000) {
+        return { tipo: 'esperar', estadoWompi: estado }
+      }
+      return { tipo: 'sin-decidir', estadoWompi: estado }
     },
   }
 }
