@@ -100,7 +100,7 @@ describe('reembolsos sin id: casado contra refunds[] de la transacción (B-1097)
   it('PENDING dentro del margen → esperar; PENDING vencido → sin-decidir', async () => {
     const dentro = await correr(tx(), wompi({ refunds: [item(0.1, { status: 'PENDING' })] }))
     expect(dentro.r).toMatchObject({ enEspera: 1, sinDecidir: 0 })
-    expect(cierres(dentro.s)).toEqual([])
+    expect(dentro.s.reportar).not.toHaveBeenCalled()
 
     const vencida = tx([ev({ createdAt: hace(61).toISOString() })])
     const w = wompi({ refunds: [{ ...item(0), created_at: hace(61).toISOString(), status: 'PENDING' }] })
@@ -235,7 +235,7 @@ describe('reembolsos sin id: casado contra refunds[] de la transacción (B-1097)
     ]
     const { r, s } = await correr(tx(), wompi({ refunds }))
     expect(r).toMatchObject({ enEspera: 1, cerradasExito: 0 })
-    expect(cierres(s)).toEqual([])
+    expect(s.reportar).not.toHaveBeenCalled()
   })
 
   it('los bordes de la ventana sí cuentan', async () => {
@@ -256,7 +256,7 @@ describe('reembolsos sin id: casado contra refunds[] de la transacción (B-1097)
 
     const b = await correr(tx(), wompi({ txError: new WompiHttpError('Wompi 500', 500) }))
     expect(b.r).toMatchObject({ errores: 1, sinDecidir: 0 })
-    expect(cierres(b.s)).toEqual([])
+    expect(b.s.reportar).not.toHaveBeenCalled()
   })
 })
 
