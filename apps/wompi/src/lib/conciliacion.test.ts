@@ -133,6 +133,65 @@ describe('conciliarTransaccionesWompi', () => {
     expect(log.fatal).toHaveBeenCalledTimes(1)
   })
 
+  describe('B-1113: severidad del rechazo de Saleor', () => {
+    const NOT_FOUND = { field: null, message: 'x', code: 'NOT_FOUND' }
+    const MARCADOR = /revisi[oó]n humana/i
+    const mensajes = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.map((c) => String(c[1]))
+
+    it('NOT_FOUND sobre un pago no cobrado (transacción ajena) → warn SIN marcador, no cuenta como error', async () => {
+      const log = crearLog()
+      const r = await conciliarTransaccionesWompi({
+        wompi: fuente([txn({ status: 'DECLINED' })]),
+        saleor: saleor({ errors: [NOT_FOUND] }),
+        ventana: VENTANA,
+        log,
+      })
+      expect(r).toMatchObject({ errores: 0, omitidas: 1 })
+      expect(log.fatal).not.toHaveBeenCalled()
+      expect(log.error).not.toHaveBeenCalled()
+      expect(log.warn).toHaveBeenCalledTimes(1)
+      expect(MARCADOR.test(mensajes(log.warn)[0])).toBe(false)
+    })
+
+    it('NOT_FOUND sobre CHARGE_SUCCESS (dinero cobrado) → fatal CON marcador y cuenta como error', async () => {
+      const log = crearLog()
+      const r = await conciliarTransaccionesWompi({
+        wompi: fuente([txn()]),
+        saleor: saleor({ errors: [NOT_FOUND] }),
+        ventana: VENTANA,
+        log,
+      })
+      expect(r.errores).toBe(1)
+      expect(log.fatal).toHaveBeenCalledTimes(1)
+      expect(MARCADOR.test(mensajes(log.fatal)[0])).toBe(true)
+    })
+
+    it('otro código de rechazo (no NOT_FOUND) → error CON marcador y cuenta como error', async () => {
+      const log = crearLog()
+      const r = await conciliarTransaccionesWompi({
+        wompi: fuente([txn({ status: 'DECLINED' })]),
+        saleor: saleor({ errors: [{ field: null, message: 'x', code: 'INVALID' }] }),
+        ventana: VENTANA,
+        log,
+      })
+      expect(r.errores).toBe(1)
+      expect(log.error).toHaveBeenCalledTimes(1)
+      expect(MARCADOR.test(mensajes(log.error)[0])).toBe(true)
+    })
+
+    it('NOT_FOUND mezclado con otro código → no es «solo NOT_FOUND»: error CON marcador', async () => {
+      const log = crearLog()
+      const r = await conciliarTransaccionesWompi({
+        wompi: fuente([txn({ status: 'DECLINED' })]),
+        saleor: saleor({ errors: [NOT_FOUND, { field: null, message: 'x', code: 'INVALID' }] }),
+        ventana: VENTANA,
+        log,
+      })
+      expect(r.errores).toBe(1)
+      expect(log.error).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('referencia que no es un ID de Saleor → omitida (fatal solo si APPROVED), sin llamar a Saleor', async () => {
     const log = crearLog()
     const s = saleor()

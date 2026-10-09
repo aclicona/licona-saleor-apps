@@ -151,8 +151,23 @@ cuyo `message` contiene «revisión humana» (sin distinguir mayúsculas).
   2026-10-06: los `log.error` «Saleor rechazó el evento… requiere revisión humana» salieron como info; `@level:error`
   devuelve vacío). No es que se logueen a info: es el transporte. Por eso el marcador va en el texto. Esto corrige la
   lectura de B-944 §2 si sugería buscar por nivel.
-- Fuera del contrato (a propósito): los `log.error` de `wompi-incoming.ts` no son de conciliación y no los cubre el
-  chequeo de `log.error`; sus `log.fatal` sí.
+- **Alcance (B-1113):** el contrato de `log.error` cubre también `wompi-incoming.ts`. Sus avisos de AUTENTICACION («Rotar
+  SALEOR_APP_TOKEN…») y de rechazo por error de negocio llevan el marcador; el `log.error` de «firma válida pero sin
+  data.transaction» es excepción explícita (evento firmado de otro tipo, p. ej. `nequi_token.updated`: sin dinero
+  identificable; si Wompi cambiara el formato de las transacciones lo cubre la conciliación).
+- **Catálogo de NOT_FOUND de Saleor (B-1113)** — el mismo rechazo se trata según el dinero en riesgo:
+
+  | Rechazo de Saleor | Conciliación (`conciliacion.ts`) | Webhook entrante (`wompi-incoming.ts`) | ¿Hallazgo del vigilante? |
+  |---|---|---|---|
+  | NOT_FOUND como único código, pago NO cobrado (`CHARGE_FAILURE`…) | `warn` sin marcador; cuenta en `omitidas`, no en `errores` | `warn` sin marcador | No: es una transacción ajena (sandbox compartido, cruce de entornos) |
+  | NOT_FOUND sobre `CHARGE_SUCCESS` | `fatal` con marcador; cuenta en `errores` | `fatal` con marcador | **Sí**, a propósito |
+  | `INCORRECT_DETAILS` (importe inconsistente) | `fatal` con marcador | `fatal` con marcador | Sí |
+  | Cualquier otro rechazo (o NOT_FOUND mezclado con otro código) | `error` con marcador | `error` con marcador | Sí |
+
+  **Ruido conocido:** los NOT_FOUND sobre `CHARGE_SUCCESS` de pagos APROBADOS en el sandbox compartido (pruebas locales
+  contra la misma cuenta de Wompi que usa producción) siguen saliendo como hallazgo a propósito: desde los logs no se
+  distinguen de dinero real cobrado sin pedido. Es ruido esperado mientras producción use la cuenta sandbox; no se
+  filtra para no esconder el caso real.
 
 ## Decisiones pendientes (Andrés)
 

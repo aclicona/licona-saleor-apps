@@ -68,7 +68,7 @@ export interface ResultadoConciliacion {
   reportadas: number
   /** Estado sin mapeo (p. ej. PENDING). */
   sinMapeo: number
-  /** Referencia que no es un ID de Saleor (ajena a esta integración). */
+  /** Ajenas a esta integración: referencia que no es un ID de Saleor, o transacción inexistente en Saleor sobre un pago no cobrado (B-1113). */
   omitidas: number
   /** Fallos por transacción (Saleor, importe corrupto, rechazo de negocio). */
   errores: number
@@ -149,8 +149,21 @@ export async function conciliarTransaccionesWompi(deps: {
       })
 
       if (res.errors.length > 0) {
-        r.errores++
         const codigos = res.errors.map((e) => e.code)
+        // B-1113: NOT_FOUND como único rechazo sobre un pago que NO cobró dinero = transacción ajena a esta
+        // instancia (sandbox compartido, cruce de entornos). No hay nada que un humano pueda hacer: se avisa sin
+        // el marcador (el vigilante no lo recoge) y cuenta como `omitidas`, igual que una referencia ajena.
+        // Sobre CHARGE_SUCCESS NO se relaja: es dinero cobrado sin pedido (ver abajo).
+        const soloInexistente = codigos.every((c) => c === CODIGO_TRANSACCION_INEXISTENTE)
+        if (soloInexistente && tipo !== 'CHARGE_SUCCESS') {
+          r.omitidas++
+          log.warn(
+            { ...campos, tipo, importeCop, errores: res.errors },
+            'Conciliación: la transacción no existe en esta instancia de Saleor (transacción ajena: sandbox compartido o cruce de entornos) y el pago no fue cobrado; se omite',
+          )
+          continue
+        }
+        r.errores++
         const critico =
           codigos.includes(CODIGO_IMPORTE_INCONSISTENTE) ||
           (codigos.includes(CODIGO_TRANSACCION_INEXISTENTE) && tipo === 'CHARGE_SUCCESS')

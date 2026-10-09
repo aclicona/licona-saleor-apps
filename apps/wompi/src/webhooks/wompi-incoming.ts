@@ -72,7 +72,7 @@ interface WompiEvent extends EventoFirmado {
  * | Token de App inválido o expirado         | 500 + error | la llamada LANZA → clasificada AUTENTICACION |
  * | Importe inconsistente (INCORRECT_DETAILS)| 200 + fatal | código en `errors[]` de la mutación          |
  * | Referencia que no es un ID de Saleor     | 200 + fatal si APPROVED, warn si no | `transactionIdDesdeReferencia` devuelve undefined |
- * | Transacción inexistente en Saleor        | 200 + fatal si CHARGE_SUCCESS, error si no | código NOT_FOUND en `errors[]` |
+ * | Transacción inexistente en Saleor        | 200 + fatal si CHARGE_SUCCESS, warn si no (B-1113) | código NOT_FOUND en `errors[]` |
  * | Importe de Wompi corrupto                | 200 + fatal | `centsToCop` lanza                           |
  * | Estado de Wompi sin mapeo                | 200 + info  | `WOMPI_TO_SALEOR[status]` undefined          |
  *
@@ -216,7 +216,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
       log.error(
         { referencia: txn.reference, tipo: saleorEventType, error },
         'Saleor rechazó la autenticación de la App: el evento es válido pero la instancia está rota. ' +
-          'Rotar SALEOR_APP_TOKEN — el siguiente reintento de Wompi entrará solo',
+          'Rotar SALEOR_APP_TOKEN — el siguiente reintento de Wompi entrará solo. Requiere revisión humana',
       )
     } else {
       log.warn(
@@ -269,7 +269,10 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
             'es dinero cobrado y perdido, requiere revisión humana inmediata',
         )
       } else {
-        log.error(
+        // B-1113: warn y SIN el marcador de revisión. Sin dinero en riesgo y sin nada que un humano pueda
+        // acreditar: es una transacción ajena (sandbox compartido o cruce de entornos); si lo marcáramos, el
+        // vigilante (B-1090) lo reportaría como hallazgo cada vez.
+        log.warn(
           { referencia: txn.reference, tipo: saleorEventType, errores: resultado.errors },
           'La transacción referenciada no existe en Saleor (cruce de entornos o transacción borrada). ' +
             'Sin dinero en riesgo porque el pago no fue aprobado. Permanente: no se pide reintento',
@@ -281,7 +284,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
       // estado: ninguno converge reintentando el mismo evento.
       log.error(
         { referencia: txn.reference, errores: resultado.errors },
-        'Saleor rechazó el evento por un error de negocio. Permanente: no se pide reintento',
+        'Saleor rechazó el evento por un error de negocio. Permanente: no se pide reintento — requiere revisión humana',
       )
     }
 

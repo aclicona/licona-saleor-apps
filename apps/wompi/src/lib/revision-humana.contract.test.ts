@@ -21,6 +21,7 @@ const ARCHIVOS_CONCILIACION = [
   '../lib/conciliacion-solicitudes.ts',
   '../lib/conciliacion-periodica.ts',
 ]
+const ARCHIVOS_CON_ERROR = [...ARCHIVOS_CONCILIACION, '../webhooks/wompi-incoming.ts']
 const ARCHIVOS_CON_FATAL = [...ARCHIVOS_CONCILIACION, '../lib/decision-reembolso.ts', '../webhooks/wompi-incoming.ts']
 
 /**
@@ -48,6 +49,11 @@ const MENSAJE_FALLO = (archivo: string, linea: number) =>
 const EXCEPCIONES_ERROR: { fragmento: string; porque: string }[] = [
   // La excepción inesperada de una corrida: el scheduler se re-arma solo y la siguiente corrida reintenta.
   { fragmento: 'la corrida lanzó una excepción; se re-arma igual', porque: 'transitorio: el temporizador se re-arma' },
+  // B-1113: evento de Wompi con firma válida pero de otro tipo (p. ej. nequi_token.updated, que llega al mismo
+  // endpoint y no trae data.transaction). Sin referencia ni importe no hay dinero identificable ni acción humana;
+  // si Wompi cambiara el formato de los eventos de transacción, lo detectan la conciliación (B-944: re-reporta lo
+  // que el webhook no entregó) y el aviso de firma inválida con su `motivo`.
+  { fragmento: 'firma válida pero sin data.transaction', porque: 'evento de otro tipo: sin dinero identificable; la conciliación cubre el formato' },
 ]
 
 describe('B-1090: avisos para humanos llevan «revisión humana»', () => {
@@ -64,7 +70,7 @@ describe('B-1090: avisos para humanos llevan «revisión humana»', () => {
     }
   })
 
-  it.each(ARCHIVOS_CONCILIACION)('todo log.error de %s es humano, transitorio o excepción explícita', (archivo) => {
+  it.each(ARCHIVOS_CON_ERROR)('todo log.error de %s es humano, transitorio o excepción explícita', (archivo) => {
     const fuente = leer(archivo)
     for (const { linea, texto } of ventanas(fuente, /log\.error\(/g)) {
       const esExcepcion = EXCEPCIONES_ERROR.some((e) => texto.includes(e.fragmento))

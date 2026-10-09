@@ -448,6 +448,7 @@ describe('wompiIncomingHandler — fallos transitorios (500, Wompi debe reintent
     expect(captura.status).toBe(500)
     expect(log.error).toHaveBeenCalled()
     expect(JSON.stringify(log.error.mock.calls)).toContain('SALEOR_APP_TOKEN')
+    expect(String(log.error.mock.calls.at(-1)?.[1])).toMatch(/revisi[oó]n humana/i) // B-1090/B-1113
   })
 
   it('responde 500 y loguea a nivel error cuando Saleor deniega el permiso (403)', async () => {
@@ -520,9 +521,10 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
     expect(mensaje).toContain('NOT_FOUND')
   })
 
-  it('responde 200 y loguea a nivel error cuando Saleor no conoce la transacción de un pago RECHAZADO', async () => {
+  it('responde 200 y loguea a nivel warn, sin marcador de revisión humana, cuando Saleor no conoce la transacción de un pago RECHAZADO', async () => {
     // Mismo código de error, otra severidad: un CHARGE_FAILURE huérfano no mueve
-    // dinero. Subirlo a fatal ahogaría las alertas que sí lo son.
+    // dinero. Subirlo a fatal ahogaría las alertas que sí lo son. B-1113: tampoco es
+    // error ni lleva «revisión humana» (transacción ajena: nada que un humano acredite).
     reportTransactionEventMock.mockResolvedValue(
       resultadoOk({
         errors: [{ field: 'id', message: "Couldn't resolve to an object.", code: 'NOT_FOUND' }],
@@ -535,8 +537,10 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
     await wompiIncomingHandler(req, reply)
 
     expect(captura.status).toBe(200)
-    expect(log.error).toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalled()
+    expect(log.error).not.toHaveBeenCalled()
     expect(log.fatal).not.toHaveBeenCalled()
+    expect(String(log.warn.mock.calls.at(-1)?.[1])).not.toMatch(/revisi[oó]n humana/i)
   })
 
   it('responde 200 y loguea a nivel error ante cualquier otro error de negocio', async () => {
@@ -551,6 +555,7 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
 
     expect(captura.status).toBe(200)
     expect(log.error).toHaveBeenCalled()
+    expect(String(log.error.mock.calls.at(-1)?.[1])).toMatch(/revisi[oó]n humana/i) // B-1090/B-1113
   })
 
   it('responde 200 y loguea a nivel crítico cuando el importe de Wompi es corrupto', async () => {
