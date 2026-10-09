@@ -138,6 +138,22 @@ nueva forma del API. `sin_medida` no es un veredicto: repetir más tarde.
 
 **Estado:** aún no está programada (se corre a mano). Programarla periódicamente queda pendiente.
 
+## Quién lee los “requiere revisión humana” (B-1090)
+
+El vigilante `scripts/railway-seguro/revision_humana_wompi.py` (repo raíz de ecommerce) corre al apagar licona-store
+(`railway_seguro.py --ejecutar`; avisa, no bloquea) y lee los logs de app-wompi de la ventana: es hallazgo toda línea
+cuyo `message` contiene «revisión humana» (sin distinguir mayúsculas).
+
+- **Regla:** todo aviso para humanos lleva el literal «revisión humana». `src/lib/revision-humana.contract.test.ts`
+  lo exige a cada `log.fatal` y `registrar.call(log, …)`, y a cada `log.error` de `conciliacion*.ts` (si no es humano,
+  debe ser transitorio —«La próxima corrida reintenta»— o estar en la lista de excepciones del test, con su porqué).
+- **El nivel no sirve para filtrar:** Railway aplana el JSON de pino y muestra `level: info` en todo (medido el
+  2026-10-06: los `log.error` «Saleor rechazó el evento… requiere revisión humana» salieron como info; `@level:error`
+  devuelve vacío). No es que se logueen a info: es el transporte. Por eso el marcador va en el texto. Esto corrige la
+  lectura de B-944 §2 si sugería buscar por nivel.
+- Fuera del contrato (a propósito): los `log.error` de `wompi-incoming.ts` no son de conciliación y no los cubre el
+  chequeo de `log.error`; sus `log.fatal` sí.
+
 ## Decisiones pendientes (Andrés)
 
 | Tema | Opciones | Recomendación |
