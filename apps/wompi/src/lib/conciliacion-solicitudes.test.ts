@@ -49,6 +49,13 @@ function wompi(txn: Partial<WompiTransaction> | Error | Record<string, Partial<W
   return { getTransaction: vi.fn(async (id: string) => respuesta(id)) }
 }
 
+/** Eventos *_SUCCESS / *_FAILURE reportados: lo «sin decidir» nunca cierra la solicitud (el INFO de aviso no cuenta). */
+function cierres(s: ReportadorSaleor): string[] {
+  return (s.reportar as ReturnType<typeof vi.fn>).mock.calls
+    .map(([p]) => p.type as string)
+    .filter((t) => /_(SUCCESS|FAILURE)$/.test(t))
+}
+
 async function correr(ts: TransaccionConSolicitudes[], w: ReturnType<typeof wompi>, s = saleor(), log = crearLog()) {
   const r = await conciliarSolicitudesPendientes({
     saleorLector: lector(ts), saleor: s, politica: politicaAnulaciones(w), ventana: VENTANA, ahora: AHORA, log,
@@ -80,7 +87,7 @@ describe('conciliarSolicitudesPendientes (anulaciones)', () => {
     const { r, s, log } = await correr([t], wompi({ status: 'VOIDED' }))
     expect(r).toMatchObject({ candidatas: 1, sinDecidir: 1 })
     expect(log.error).toHaveBeenCalledTimes(1)
-    expect(s.reportar).not.toHaveBeenCalled()
+    expect(cierres(s)).toEqual([])
   })
 
   it('dos requests: el psp A con CANCEL_FAILURE y el B abierto → solo cierra B', async () => {
@@ -119,7 +126,7 @@ describe('conciliarSolicitudesPendientes (anulaciones)', () => {
   it.each(['PENDING', 'DECLINED', 'ERROR'] as const)('%s → sin decidir con error que lleva estadoWompi', async (status) => {
     const { r, s, log } = await correr([transaccion()], wompi({ status }))
     expect(r.sinDecidir).toBe(1)
-    expect(s.reportar).not.toHaveBeenCalled()
+    expect(cierres(s)).toEqual([])
     expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: status }), expect.any(String))
   })
 
@@ -231,14 +238,14 @@ describe('conciliarSolicitudesPendientes (reembolsos, B-1077)', () => {
     const vencido = txR({ events: [reqReembolso({ createdAt: hace(61) })] })
     const fuera = await correrR([vencido], wompiR({ status: 'PENDING' }))
     expect(fuera.r).toMatchObject({ enEspera: 0, sinDecidir: 1, cerradasFallo: 0 })
-    expect(fuera.s.reportar).not.toHaveBeenCalled()
+    expect(cierres(fuera.s)).toEqual([])
     expect(fuera.log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: 'PENDING' }), expect.any(String))
   })
 
   it('estado desconocido → sin decidir', async () => {
     const { r, s } = await correrR([txR()], wompiR({ status: 'RARO' }))
     expect(r.sinDecidir).toBe(1)
-    expect(s.reportar).not.toHaveBeenCalled()
+    expect(cierres(s)).toEqual([])
   })
 
   it('404 → sin decidir sin contar error; 500 → errores 1', async () => {
@@ -284,5 +291,59 @@ describe('conciliarSolicitudesPendientes (reembolsos, B-1077)', () => {
     const { r, log } = await correrR([txR()], wompiR({ status: 'APPROVED' }), saleor({ alreadyProcessed: true }))
     expect(r).toMatchObject({ yaCerradas: 1, cerradasExito: 0, cerradasFallo: 0 })
     expect(log.warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('B-1098: aviso INFO de lo sin decidir', () => {
+  const sinDecidir = () => wompi({ status: 'DECLINED' })
+  const clave = 'revision-humana:CANCEL_REQUEST:estado-inesperado:psp-A'
+  const reportes = (s: ReportadorSaleor) => (s.reportar as ReturnType<typeof vi.fn>).mock.calls.map(([p]) => p)
+
+  it('sin-decidir → un INFO con la clave, el importe de la solicitud y sin availableActions', async () => {
+    const { s, log } = await correr([transaccion()], sinDecidir())
+    expect(s.reportar).toHaveBeenCalledTimes(1)
+    const [p] = reportes(s)
+    expect(p).toMatchObject({ transactionId: 'T1', type: 'INFO', pspReference: clave, amount: 120000 })
+    expect(p.availableActions).toBeUndefined()
+    expect(p.message).toBe('Revisión humana: anulación sin resolver en Wompi (estado-inesperado). Este aviso no mueve dinero; ver logs de app-wompi')
+    expect(log.error).toHaveBeenCalledTimes(1)
+  })
+
+  it('si los eventos ya contienen ese INFO no se reporta, pero el log.error con marcador sí se emite', async () => {
+    const t = transaccion({ events: [evento(), evento({ type: 'INFO', pspReference: clave })] })
+    const { s, log, r } = await correr([t], sinDecidir())
+    expect(s.reportar).not.toHaveBeenCalled()
+    expect(r.sinDecidir).toBe(1)
+    expect(log.error).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/revisión humana/i))
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('caso B (pendiente sin request abierto) → clave con sin-request-abierto y el transactionId', async () => {
+    const t = transaccion({ events: [evento(), evento({ type: 'CANCEL_SUCCESS' })] })
+    const { s } = await correr([t], sinDecidir())
+    expect(reportes(s)).toEqual([
+      expect.objectContaining({ type: 'INFO', amount: 120000, pspReference: 'revision-humana:CANCEL_REQUEST:sin-request-abierto:T1' }),
+    ])
+  })
+
+  it.each([
+    ['lanza', () => vi.fn().mockRejectedValue(new Error('red'))],
+    ['devuelve errors', () => vi.fn().mockResolvedValue({ alreadyProcessed: false, transactionId: null, errors: [{ field: null, message: 'x', code: 'GRAPHQL_ERROR' }] })],
+  ])('si reportar %s → no propaga, avisa con warn, no cuenta error y sigue con la siguiente', async (_n, mk) => {
+    const s: ReportadorSaleor = { reportar: mk() }
+    const t2 = transaccion({ id: 'T2', events: [evento({ pspReference: 'psp-Z' })] })
+    const { r, log } = await correr([transaccion(), t2], sinDecidir(), s)
+    expect(r).toMatchObject({ candidatas: 2, sinDecidir: 2, errores: 0 })
+    expect(s.reportar).toHaveBeenCalledTimes(2)
+    expect(log.error).toHaveBeenCalledTimes(2)
+    expect(log.warn).toHaveBeenCalledTimes(2)
+    expect(log.warn).toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/La próxima corrida reintenta/))
+  })
+
+  it('otro motivo para el mismo psp → otra clave (y no la deduplica el INFO de otro motivo)', async () => {
+    const previo = transaccion({ events: [evento(), evento({ type: 'INFO', pspReference: clave })] })
+    const { s } = await correr([previo], wompi({ status: 'PENDING' }), saleor(), crearLog())
+    // PENDING en anulaciones también es sin-decidir → motivo pendiente-vencido
+    expect(reportes(s)[0].pspReference).toBe('revision-humana:CANCEL_REQUEST:pendiente-vencido:psp-A')
   })
 })

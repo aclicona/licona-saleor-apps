@@ -7,6 +7,7 @@ import type {
   TipoSolicitud,
   TransaccionConSolicitudes,
 } from './saleor-client.js'
+import { avisarRevisionHumana, motivoDeEstadoWompi } from './aviso-revision-humana.js'
 import { esReferenciaSinId } from './referencia-reembolso.js'
 import type { WompiTransaction } from './wompi-client.js'
 import { decidirReembolsoConId, decidirReembolsoSinId, type ConsultorWompiReembolsos } from './decision-reembolso.js'
@@ -23,6 +24,7 @@ import { decidirReembolsoConId, decidirReembolsoSinId, type ConsultorWompiReembo
  * Contrato con Saleor: el evento de cierre lleva el MISMO `pspReference` e importe que el request. Saleor
  * empareja por psp + familia; con otro importe devuelve INCORRECT_DETAILS en vez de `alreadyProcessed`.
  * Idempotencia: al cerrarse, la transacción deja de ser candidata y un duplicado da `alreadyProcessed`.
+ * Lo `sin-decidir` deja además un evento INFO en la transacción (`aviso-revision-humana.ts`, B-1098).
  * El motor NUNCA lanza. Los mensajes hacia Saleor son siempre fijos (nunca texto de error, B-1061).
  */
 
@@ -134,6 +136,13 @@ async function cerrarSolicitud(
   if (decision.tipo === 'sin-decidir') {
     r.sinDecidir++
     log.error(conEstado, 'Conciliación de solicitudes: estado de Wompi inesperado para una solicitud pendiente. Requiere revisión humana')
+    await avisarRevisionHumana(
+      {
+        transactionId: s.transactionId, tipo: politica.tipoRequest, motivo: motivoDeEstadoWompi(decision.estadoWompi),
+        pspReference: s.pspReference, importeCop: s.importeCop, eventos: s.eventosTransaccion,
+      },
+      { saleor, log },
+    )
     return
   }
   if (decision.importeWompiCop !== undefined && decision.importeWompiCop !== s.importeCop) {
@@ -198,6 +207,10 @@ export async function conciliarSolicitudesPendientes(deps: {
     if (abiertas.length === 0) {
       r.sinDecidir++
       log.error({ transactionId: t.id, tipo: politica.tipoRequest }, 'Conciliación de solicitudes: pendiente sin request abierto: inconsistente, revisión humana')
+      await avisarRevisionHumana(
+        { transactionId: t.id, tipo: politica.tipoRequest, motivo: 'sin-request-abierto', importeCop: politica.importePendiente(t), eventos: t.events },
+        { saleor, log },
+      )
       continue
     }
     for (const e of abiertas) {

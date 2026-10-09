@@ -63,6 +63,29 @@ opcional `reembolsos` (misma forma que `anulaciones`); un `errorApi` de anulacio
   `log.error` (`estadoWompi`: `SIN_ID_AMBIGUO`, `CANDIDATOS_MULTIPLES`, `CONOCIDO_NO_CONSULTABLE`, `SIN_CANDIDATOS`
   vencido, `HTTP_404`) para revisión humana.
 
+### Aviso INFO en la transacción de Saleor (B-1098)
+
+Lo que el motor deja **sin decidir** (estado inesperado de Wompi, PENDING vencido, 404, y el caso «pendiente sin
+request abierto») ya no queda solo en el `log.error` «revisión humana»: además se deja un evento `INFO` en la
+transacción de Saleor, visible en la página del pedido del Dashboard (`src/lib/aviso-revision-humana.ts`).
+
+- **Orden:** primero el `log.error` (se conserva tal cual y se emite siempre), después el aviso. El aviso nunca
+  cierra la solicitud ni mueve dinero (no altera charged / refundPending / cancelPending ni el psp de la transacción).
+- **Clave (`pspReference` del INFO):** `revision-humana:<CANCEL_REQUEST|REFUND_REQUEST>:<motivo>:<psp del request>`;
+  en el caso sin request abierto, `…:sin-request-abierto:<transactionId>`. Nunca el psp del cargo.
+- **Motivo** (enum cerrado, derivado de la decisión, no del status crudo de Wompi, que va solo al log):
+  `pendiente-vencido` (`estadoWompi` PENDING), `no-encontrado` (`HTTP_404`), `estado-inesperado` (todo lo demás),
+  `sin-request-abierto`. Motivo distinto para el mismo psp = otra clave = otro aviso.
+- **Dedupe en la app:** Saleor NO deduplica `INFO` (`alreadyProcessed` nunca es true). Antes de reportar se miran los
+  eventos de la transacción: si ya hay `{type: INFO, pspReference: clave}` no se reporta (sin log nuevo), así la
+  corrida periódica no llena el pedido de avisos repetidos.
+- **`availableActions` no viaja:** es destructivo (si no es null Saleor sobrescribe las acciones). Mandar `[]`
+  borraría el botón Refund, así que para `INFO` la variable se omite siempre (`saleor-client.ts`).
+- **Importe y mensaje:** `amount` = importe de la solicitud (caso sin request abierto: el pendiente de la política);
+  mensaje fijo por motivo, sin texto de Wompi (B-1061).
+- **Si falla** (lanza o Saleor devuelve `errors`): `warn` «no se pudo dejar el aviso en Saleor; el log ya lo
+  registró. La próxima corrida reintenta»; no cuenta en `errores` ni lanza. Requiere solo `HANDLE_PAYMENTS`.
+
 ### Reembolsos sin id (B-1097)
 
 #### Evidencia del sandbox (2026-10-09)
@@ -149,6 +172,8 @@ nueva forma del API. `sin_medida` no es un veredicto: repetir más tarde.
 **Estado:** aún no está programada (se corre a mano). Programarla periódicamente queda pendiente.
 
 ## Quién lee los “requiere revisión humana” (B-1090)
+
+> Segundo canal (B-1098): lo `sin-decidir` también deja un evento `INFO` en la transacción de Saleor; ver «Aviso INFO en la transacción de Saleor». El vigilante sigue leyendo solo los logs.
 
 El vigilante `scripts/railway-seguro/revision_humana_wompi.py` (repo raíz de ecommerce) corre al apagar licona-store
 (`railway_seguro.py --ejecutar`; avisa, no bloquea) y lee los logs de app-wompi de la ventana: es hallazgo toda línea

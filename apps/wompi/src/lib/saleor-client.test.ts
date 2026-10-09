@@ -8,7 +8,7 @@ vi.mock('graphql-request', () => ({
   },
 }))
 
-import { listarTransaccionesConSolicitud, MAX_PAGINAS_SOLICITUDES } from './saleor-client.js'
+import { listarTransaccionesConSolicitud, reportTransactionEvent, MAX_PAGINAS_SOLICITUDES } from './saleor-client.js'
 
 const nodo = (id: string) => ({
   node: {
@@ -52,5 +52,38 @@ describe('listarTransaccionesConSolicitud', () => {
   it('lanza si falla el transporte', async () => {
     request.mockRejectedValue(new Error('red'))
     await expect(listarTransaccionesConSolicitud({ tipo: 'CANCEL_REQUEST', desde: new Date() })).rejects.toThrow('red')
+  })
+})
+
+describe('reportTransactionEvent: availableActions', () => {
+  const base = { transactionId: 'T1', amount: 100, pspReference: 'p', message: 'm' }
+  beforeEach(() => {
+    request.mockReset()
+    request.mockResolvedValue({ transactionEventReport: { alreadyProcessed: false, transaction: { id: 'T1' }, errors: [] } })
+    process.env.SALEOR_API_URL = 'https://saleor.test/graphql/'
+    process.env.SALEOR_APP_TOKEN = 'tok'
+  })
+  const vars = () => request.mock.calls[0][0].variables
+
+  it('INFO: la variable availableActions no viaja (ni siquiera como [])', async () => {
+    await reportTransactionEvent({ ...base, type: 'INFO', availableActions: undefined })
+    expect(vars().availableActions).toBeUndefined()
+    expect(JSON.stringify(vars())).not.toContain('availableActions')
+    expect(vars().type).toBe('INFO')
+  })
+
+  it('INFO ignora availableActions explícitas', async () => {
+    await reportTransactionEvent({ ...base, type: 'INFO', availableActions: ['REFUND'] })
+    expect(vars().availableActions).toBeUndefined()
+  })
+
+  it('CHARGE_SUCCESS sin parámetro sigue declarando REFUND', async () => {
+    await reportTransactionEvent({ ...base, type: 'CHARGE_SUCCESS' })
+    expect(vars().availableActions).toEqual(['REFUND'])
+  })
+
+  it('CANCEL_SUCCESS sin parámetro sigue mandando [] como hoy', async () => {
+    await reportTransactionEvent({ ...base, type: 'CANCEL_SUCCESS' })
+    expect(vars().availableActions).toEqual([])
   })
 })

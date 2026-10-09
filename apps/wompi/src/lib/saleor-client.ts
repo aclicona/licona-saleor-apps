@@ -1,5 +1,5 @@
 import { GraphQLClient, gql } from 'graphql-request'
-import { accionesParaEvento } from './acciones.js'
+import { accionesParaEvento, type AccionTransaccion } from './acciones.js'
 
 const TRANSACTION_EVENT_REPORT = gql`
   mutation TransactionEventReport(
@@ -32,6 +32,7 @@ export type SaleorTransactionEventType =
   | 'REFUND_FAILURE'
   | 'CANCEL_SUCCESS'
   | 'CANCEL_FAILURE'
+  | 'INFO'
 
 /** Error de negocio devuelto por la propia mutación (no por el transporte). */
 export interface SaleorTransactionEventError {
@@ -88,6 +89,16 @@ function crearClienteSaleor(): GraphQLClient {
   })
 }
 
+/** `undefined` hace que la variable no viaje (JSON la omite) y Saleor conserve las acciones actuales. */
+function accionesDeclaradas(params: {
+  type: SaleorTransactionEventType
+  availableActions?: AccionTransaccion[] | null
+}): AccionTransaccion[] | undefined {
+  if (params.type === 'INFO') return undefined
+  if (params.availableActions === undefined) return accionesParaEvento(params.type)
+  return params.availableActions ?? undefined
+}
+
 /**
  * Reporta un evento de transacción a Saleor.
  *
@@ -103,6 +114,8 @@ export async function reportTransactionEvent(params: {
   amount: number
   pspReference: string
   message?: string
+  /** Omitido → `accionesParaEvento(type)`. Para `INFO` se ignora: la variable no viaja (Saleor sobrescribe las acciones si no es null). */
+  availableActions?: AccionTransaccion[] | null
 }): Promise<TransactionEventReportResult> {
   const client = crearClienteSaleor()
 
@@ -114,7 +127,7 @@ export async function reportTransactionEvent(params: {
       amount: params.amount.toString(),
       pspReference: params.pspReference,
       message: params.message,
-      availableActions: accionesParaEvento(params.type),
+      availableActions: accionesDeclaradas(params),
     },
     signal: AbortSignal.timeout(TIMEOUT_SALEOR_MS),
   })

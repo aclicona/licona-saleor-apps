@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { timingSafeEqual } from 'node:crypto'
 import { centsToCop } from './money.js'
 import { transactionIdDesdeReferencia } from './referencia.js'
+import type { AccionTransaccion } from './acciones.js'
 import { CODIGO_IMPORTE_INCONSISTENTE, CODIGO_TRANSACCION_INEXISTENTE } from './saleor-errors.js'
 import type { SaleorTransactionEventType, TransactionEventReportResult } from './saleor-client.js'
 import { WOMPI_TO_SALEOR } from '../webhooks/wompi-incoming.js'
@@ -50,6 +51,8 @@ export interface ReportadorSaleor {
     amount: number
     pspReference: string
     message?: string
+    /** Omitido: `accionesParaEvento(type)`. `INFO` nunca lo envía (es destructivo en Saleor). */
+    availableActions?: AccionTransaccion[] | null
   }): Promise<TransactionEventReportResult>
 }
 
