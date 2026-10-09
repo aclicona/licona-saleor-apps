@@ -68,7 +68,7 @@ const TABLA: Record<string, Entrada> = {
     handler: 'paymentGatewayInitializeHandler',
     body: { data: {} },
     // No llama a Wompi: solo debe responder tras la verificación.
-    escenarios: [{ cuelga: /./, puedeExistirEnWompi: false }],
+    escenarios: [], // solo el escenario «se cuelga todo», que se añade solo
   },
   '/api/webhooks/transaction-initialize-session': {
     handler: 'transactionInitializeHandler',
@@ -87,7 +87,7 @@ const TABLA: Record<string, Entrada> = {
   '/api/webhooks/transaction-charge-requested': {
     handler: 'transactionChargeHandler',
     body: { transaction: TXN, action: ACTION },
-    escenarios: [{ cuelga: /./, puedeExistirEnWompi: false }],
+    escenarios: [], // solo el escenario «se cuelga todo», que se añade solo
   },
   '/api/webhooks/transaction-refund-requested': {
     handler: 'transactionRefundHandler',
@@ -104,6 +104,18 @@ const TABLA: Record<string, Entrada> = {
     escenarios: [{ cuelga: /\/void$/, puedeExistirEnWompi: true }],
   },
 }
+
+/**
+ * Escenario «se cuelga todo»: Wompi no responde a NINGUNA petición. Se añade solo a cada handler de la
+ * tabla (ver `escenariosDe`), así un handler nuevo, o una llamada nueva dentro de uno existente que no
+ * reciba `plazo.signal`, no se escapa por no coincidir con el regex de un escenario concreto.
+ * Solo exige el TIEMPO (respuesta dentro del plazo): `puedeExistirEnWompi: false`, porque la primera
+ * llamada de cada handler es la que se cuelga y en initialize esa es el acceptance token, donde un
+ * CHARGE_FAILURE cierto es legítimo. Que no haya *_FAILURE tras crear algo lo cubren los escenarios
+ * concretos de cada entrada.
+ */
+const SE_CUELGA_TODO: Escenario = { cuelga: /./, puedeExistirEnWompi: false }
+const escenariosDe = (e: Entrada): Escenario[] => [...e.escenarios, SE_CUELGA_TODO]
 
 /**
  * Incumplimientos conocidos, por ruta. El test exige que SIGAN ocurriendo: cuando uno se arregla, falla
@@ -245,7 +257,7 @@ describe('contrato «los webhooks síncronos responden dentro del plazo» (B-108
 
   for (const [ruta, entrada] of Object.entries(TABLA)) {
     const excepcion = EXCEPCIONES[ruta]
-    entrada.escenarios.forEach((esc, i) => {
+    escenariosDe(entrada).forEach((esc, i) => {
       const titulo = `${ruta} [se cuelga ${esc.cuelga}]`
       if (!excepcion) {
         it(`${titulo} -> responde dentro del plazo y sin fallo final espurio`, async () => {
@@ -255,7 +267,7 @@ describe('contrato «los webhooks síncronos responden dentro del plazo» (B-108
       } else if (i === 0) {
         it(`${ruta} -> VIOLACIÓN CONOCIDA ${excepcion.reporte}: sigue ocurriendo (quita la excepción al arreglarla)`, async () => {
           const todas: string[] = []
-          for (const e of entrada.escenarios) todas.push(...(await violacionesDePlazo(HANDLERS[entrada.handler], entrada.body, e)))
+          for (const e of escenariosDe(entrada)) todas.push(...(await violacionesDePlazo(HANDLERS[entrada.handler], entrada.body, e)))
           expect(todas, excepcion.motivo).not.toEqual([])
         })
       }
