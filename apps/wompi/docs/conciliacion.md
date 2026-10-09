@@ -76,6 +76,8 @@ Probado con transacción APPROVED de sandbox y dos `POST /refunds` del mismo imp
 | `GET /refunds/{id}` | 200 | `data`: `id, created_at, transaction_id, status, amount_in_cents, status_message, external_identifier, is_sandbox, sandbox_test_scenario, cancelled_at` |
 | `GET /transactions/{id}` | 200 | `data.refunds[]` embebido, cada item solo `created_at, transaction_id, status, amount_in_cents, status_message` (**sin `id`**); el `status` se actualiza (`PENDING` → `APPROVED`) |
 
+| Comparación de `created_at`: `GET /refunds/{id}` vs item embebido de `GET /transactions/{id}` (reembolsos 31180 y 31181 de la transacción `12084641-1791526992-27837`) | 200 / 200 | **Idénticos al milisegundo**, como string literal y como `Date.parse`: 31180 → `"2026-10-09T06:23:16.472Z"` (1791526996472) en ambos; 31181 → `"2026-10-09T06:23:20.768Z"` (1791527000768) en ambos. Mismos `amount_in_cents` (1000000). Verificado el 2026-10-09 |
+
 El objeto refund SÍ trae `created_at`. El embebido no trae `id`: por eso la exclusión de los reembolsos ya conocidos
 se hace por `created_at` exacto (regla 3 del ruling).
 
@@ -94,6 +96,16 @@ Riesgos: aceptado dos reembolsos del mismo importe con created_at idéntico al m
 Implementación: `lib/decision-reembolso.ts` (casado y tabla de estados), `lib/refunds-embebidos.ts` (validación de la
 forma del dato externo; un item mal formado no cuenta). El `log.warn` de cierre lleva `casadoSinId: { createdAt, idsExcluidos }`
 (`idsExcluidos` = conocidos que efectivamente descartaron un candidato).
+
+**Extensión conservadora (orquestador, revisión pre-merge 2026-10-09).** Hueco de la regla 4: un request sin-id YA
+CERRADO no excluye su reembolso. Ejemplo: A (sin-id, importe X) se casó con R1 y quedó `REFUND_SUCCESS`; después B
+(sin-id, mismo X, cuyo reembolso nunca se creó) tiene una ventana que contiene a R1, así que R1 sería su único
+candidato y B se cerraría como éxito sin dinero devuelto. Como el embebido no trae `id`, no se puede saber que R1 ya
+es de A. Regla añadida (solo agrega `sin-decidir`): si en la transacción existe OTRO psp sin-id del mismo importe en
+cualquier evento `REFUND_REQUEST/SUCCESS/FAILURE` (abierto o cerrado, distinto del actual) cuya ventana de casado
+(calculada con el `createdAt` de su `REFUND_REQUEST`) se solape con la del request actual, este queda en
+`sin-decidir` (`SIN_ID_AMBIGUO`) sin consultar a Wompi. Si del otro no se ve su `REFUND_REQUEST`, se asume solapado.
+Además, los conocidos se limitan a `REFUND_REQUEST/SUCCESS/FAILURE` (no `REFUND_REVERSE`).
 
 ## Decisiones pendientes (Andrés)
 

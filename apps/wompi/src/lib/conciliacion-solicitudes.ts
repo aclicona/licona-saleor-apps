@@ -52,7 +52,7 @@ export interface SolicitudPendiente {
   importeCop: number
   creadaEn: Date
   /** Eventos de la transacción en Saleor: la política de reembolsos sin id los usa para excluir los conocidos (B-1097). */
-  eventosTransaccion?: EventoTransaccionSaleor[]
+  eventosTransaccion: EventoTransaccionSaleor[]
 }
 
 export type Decision =

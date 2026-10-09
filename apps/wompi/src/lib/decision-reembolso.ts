@@ -16,6 +16,8 @@ import type { WompiRefund, WompiTransaction } from './wompi-client.js'
 export const MENSAJE_REEMBOLSO_OK = 'Wompi: reembolso confirmado (APPROVED)'
 const SUFIJO_SIN_ID = '; casado por importe y fecha, sin id'
 const ESTADOS_REEMBOLSO_FALLIDO = new Set(['DECLINED', 'ERROR', 'VOIDED'])
+/** Familias de evento que pueden llevar el psp de un reembolso (REFUND_REVERSE no). */
+const TIPOS_REEMBOLSO = new Set(['REFUND_REQUEST', 'REFUND_SUCCESS', 'REFUND_FAILURE'])
 /** Holgura de la ventana de casado: el request y el reembolso de Wompi no nacen en el mismo instante. */
 const HOLGURA_CASADO_MS = 2 * 60_000
 
@@ -77,7 +79,7 @@ export async function decidirReembolsoConId(
 function idsConocidos(eventos: EventoTransaccionSaleor[], importe: number): string[] {
   const ids = new Set<string>()
   for (const e of eventos) {
-    if (!e.type.startsWith('REFUND_') || !e.pspReference || esReferenciaSinId(e.pspReference)) continue
+    if (!TIPOS_REEMBOLSO.has(e.type) || !e.pspReference || esReferenciaSinId(e.pspReference)) continue
     if (e.amount === importe) ids.add(e.pspReference)
   }
   return [...ids]
@@ -95,6 +97,35 @@ function sinIdAbiertosDelImporte(eventos: EventoTransaccionSaleor[], importe: nu
   ).length
 }
 
+/** Ventana de casado `[creadaEn − holgura, creadaEn + plazo + holgura]` en epoch ms. */
+function ventanaDeCasado(creadaMs: number): [number, number] {
+  return [creadaMs - HOLGURA_CASADO_MS, creadaMs + PLAZO_GLOBAL_MS + HOLGURA_CASADO_MS]
+}
+
+/**
+ * Extensión conservadora de la regla 4 (revisión pre-merge): ¿hay en la transacción OTRO sin-id del mismo importe,
+ * abierto o ya cerrado, cuya ventana se solape con la del request actual? Un sin-id cerrado pudo haberse casado con
+ * un reembolso que ahora caería en la ventana de este; sin id no se distingue, así que no se adivina. Si del otro no
+ * se ve su REFUND_REQUEST (sin fecha), se asume solapado.
+ */
+function haySinIdSolapado(eventos: EventoTransaccionSaleor[], s: SolicitudPendiente): boolean {
+  const [desde, hasta] = ventanaDeCasado(s.creadaEn.getTime())
+  const otros = new Set(
+    eventos
+      .filter((e) => TIPOS_REEMBOLSO.has(e.type) && e.amount === s.importeCop)
+      .map((e) => e.pspReference)
+      .filter((psp): psp is string => !!psp && esReferenciaSinId(psp) && psp !== s.pspReference),
+  )
+  for (const psp of otros) {
+    const peticion = eventos.find((e) => e.type === 'REFUND_REQUEST' && e.pspReference === psp)
+    const creadaMs = peticion ? Date.parse(peticion.createdAt) : Number.NaN
+    if (!Number.isFinite(creadaMs)) return true
+    const [d, h] = ventanaDeCasado(creadaMs)
+    if (d <= hasta && desde <= h) return true
+  }
+  return false
+}
+
 /**
  * Casado de un request `<pspTx>:reembolso-sin-id:<uuid>` contra `refunds[]` de `GET /transactions/{pspTx}`.
  * Nunca se adivina: ambigüedad, conocido no consultable o 0 candidatos vencidos → sin decidir (revisión humana).
@@ -105,8 +136,8 @@ export async function decidirReembolsoSinId(
   ahora: Date,
   margenMin: number,
 ): Promise<Decision> {
-  const eventos = s.eventosTransaccion ?? []
-  if (sinIdAbiertosDelImporte(eventos, s.importeCop) >= 2) return { tipo: 'sin-decidir', estadoWompi: 'SIN_ID_AMBIGUO' }
+  const eventos = s.eventosTransaccion
+  if (sinIdAbiertosDelImporte(eventos, s.importeCop) >= 2 || haySinIdSolapado(eventos, s)) return { tipo: 'sin-decidir', estadoWompi: 'SIN_ID_AMBIGUO' }
   const pspTx = transaccionDeReferenciaSinId(s.pspReference)
   if (!pspTx) return { tipo: 'sin-decidir', estadoWompi: 'SIN_ID' }
 
@@ -118,8 +149,7 @@ export async function decidirReembolsoSinId(
     throw error
   }
 
-  const desde = s.creadaEn.getTime() - HOLGURA_CASADO_MS
-  const hasta = s.creadaEn.getTime() + PLAZO_GLOBAL_MS + HOLGURA_CASADO_MS
+  const [desde, hasta] = ventanaDeCasado(s.creadaEn.getTime())
   let candidatos = refundsEmbebidos(txn).filter(
     (r) => importeReembolsoCop({ amount_in_cents: r.amountInCents }) === s.importeCop && r.creadoMs >= desde && r.creadoMs <= hasta,
   )

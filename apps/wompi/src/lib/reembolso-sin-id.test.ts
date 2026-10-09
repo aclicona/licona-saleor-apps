@@ -164,6 +164,46 @@ describe('reembolsos sin id: casado contra refunds[] de la transacción (B-1097)
     expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: 'CONOCIDO_NO_CONSULTABLE' }), expect.any(String))
   })
 
+  describe('otro sin-id del mismo importe ya cerrado (revisión pre-merge)', () => {
+    const cerrado = (psp: string, creadaMin: number) => [
+      ev({ pspReference: psp, createdAt: hace(creadaMin).toISOString() }),
+      ev({ type: 'REFUND_SUCCESS', pspReference: psp, createdAt: hace(1).toISOString() }),
+    ]
+
+    it('B (abierto) con ventana solapada con la de A (ya SUCCESS) → sin-decidir sin consultar Wompi', async () => {
+      // A se casó con R1 y quedó SUCCESS; B nunca creó su reembolso, pero R1 cae en su ventana.
+      const t = tx([ev(), ...cerrado(SIN_ID_2, 10.5)])
+      const w = wompi({ refunds: [item(0.1)] })
+      const { r, s } = await correr(t, w)
+      expect(r).toMatchObject({ sinDecidir: 1, cerradasExito: 0 })
+      expect(w.getTransaction).not.toHaveBeenCalled()
+      expect(w.getRefund).not.toHaveBeenCalled()
+      expect(s.reportar).not.toHaveBeenCalled()
+    })
+
+    it('el otro sin-id sin REFUND_REQUEST visible (solo SUCCESS) se trata como solapado', async () => {
+      const t = tx([ev(), ev({ type: 'REFUND_SUCCESS', pspReference: SIN_ID_2 })])
+      const { r } = await correr(t, wompi({ refunds: [item(0.1)] }))
+      expect(r.sinDecidir).toBe(1)
+    })
+
+    it('ventanas que no se solapan, o de otro importe → se casa normalmente', async () => {
+      const lejos = tx([ev(), ...cerrado(SIN_ID_2, 600)])
+      expect((await correr(lejos, wompi({ refunds: [item(0.1)] }))).r.cerradasExito).toBe(1)
+
+      const otroImporte = tx([ev(), ev({ pspReference: SIN_ID_2, amount: 1000 }), ev({ type: 'REFUND_SUCCESS', pspReference: SIN_ID_2, amount: 1000 })])
+      expect((await correr(otroImporte, wompi({ refunds: [item(0.1)] }))).r.cerradasExito).toBe(1)
+    })
+  })
+
+  it('REFUND_REVERSE no cuenta como conocido', async () => {
+    const t = tx([ev(), ev({ type: 'REFUND_REVERSE', pspReference: '999' })])
+    const w = wompi({ refunds: [item(0.1)] })
+    const { r } = await correr(t, w)
+    expect(w.getRefund).not.toHaveBeenCalled()
+    expect(r.cerradasExito).toBe(1)
+  })
+
   it('≥ 2 requests sin-id abiertos del mismo importe → todos sin-decidir sin llamar a Wompi', async () => {
     const t = tx([ev(), ev({ pspReference: SIN_ID_2 })])
     const w = wompi({ refunds: [item(0.1)] })
