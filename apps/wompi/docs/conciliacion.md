@@ -58,11 +58,14 @@ Mismo motor, tras las anulaciones y antes del log final: cierra los `REFUND_REQU
 (`MARGEN_REEMBOLSO_PENDIENTE_MIN`) y después queda para revisión humana, nunca como fallo. Resumen en la clave
 opcional `reembolsos` (misma forma que `anulaciones`); un `errorApi` de anulaciones no impide que corran.
 
-- **Sin id:** un request con psp `...:reembolso-sin-id:...` no se consulta (no hay id); queda en `log.error`
-  (`estadoWompi: SIN_ID`) para revisión humana. Confirmado el 2026-10-09 contra el sandbox (B-1097): Wompi NO tiene
-  endpoint de listado de reembolsos; solo `GET /transactions/{id}` trae `refunds[]` embebido, sin `id` (ver abajo).
+- **Sin id:** un request con psp `<pspTx>:reembolso-sin-id:<uuid>` se casa contra `refunds[]` de
+  `GET /transactions/{pspTx}` por importe y fecha (B-1097, ver «Reembolsos sin id» abajo). Lo ambiguo queda en
+  `log.error` (`estadoWompi`: `SIN_ID_AMBIGUO`, `CANDIDATOS_MULTIPLES`, `CONOCIDO_NO_CONSULTABLE`, `SIN_CANDIDATOS`
+  vencido, `HTTP_404`) para revisión humana.
 
-### Reembolsos sin id: evidencia del sandbox (B-1097, 2026-10-09)
+### Reembolsos sin id (B-1097)
+
+#### Evidencia del sandbox (2026-10-09)
 
 Probado con transacción APPROVED de sandbox y dos `POST /refunds` del mismo importe:
 
@@ -73,8 +76,24 @@ Probado con transacción APPROVED de sandbox y dos `POST /refunds` del mismo imp
 | `GET /refunds/{id}` | 200 | `data`: `id, created_at, transaction_id, status, amount_in_cents, status_message, external_identifier, is_sandbox, sandbox_test_scenario, cancelled_at` |
 | `GET /transactions/{id}` | 200 | `data.refunds[]` embebido, cada item solo `created_at, transaction_id, status, amount_in_cents, status_message` (**sin `id`**); el `status` se actualiza (`PENDING` → `APPROVED`) |
 
-El objeto refund SÍ trae `created_at`. Como el embebido no trae `id`, no se pueden excluir los ya conocidos y dos reembolsos
-del mismo importe son indistinguibles; por eso no se implementó el casado automático.
+El objeto refund SÍ trae `created_at`. El embebido no trae `id`: por eso la exclusión de los reembolsos ya conocidos
+se hace por `created_at` exacto (regla 3 del ruling).
+
+#### Ruling (Fable, 2026-10-09, B-1097) — literal
+
+**RULING (Fable, 2026-10-09, B-1097)** Sí: se implementa el casado contra `refunds[]` de `GET /transactions/{pspTx}`. Motivo: el riesgo de decidir mal queda acotado por la exclusión *exacta* de los conocidos y por la regla «ambigüedad → humano»; el beneficio es cerrar en automático el caso normal (un solo reembolso de ese importe). Nunca se adivina.
+1. **Alcance.** Solo requests con psp `<pspTx>:reembolso-sin-id:<uuid>`. `pspTx` = prefijo antes del separador. `GET /transactions/{pspTx}` → 404 → `sin-decidir` (`HTTP_404`); otro error → propagar (cuenta en `errores`, reintenta la próxima corrida), igual que hoy.
+2. **Candidatos.** Items de `refunds[]` con `amount_in_cents` igual al importe del request (misma conversión existente, `centsToCop(item) === s.importeCop`) y `created_at` ∈ `[creadaEn − 2 min, creadaEn + PLAZO_GLOBAL_MS + 2 min]`. Fechas como epoch ms (`Date.parse`), nunca string; un `created_at` que no parsea → el item no cuenta.
+3. **Exclusión de conocidos — por `created_at` exacto, no por conteo.** Conocidos = psp con id real (no sin-id) de todos los eventos `REFUND_REQUEST/SUCCESS/FAILURE` de la transacción en Saleor, deduplicados, restringidos a los del mismo importe del request. Por cada uno, `GET /refunds/{id}` y se descarta el candidato cuyo `created_at` (epoch ms) y `amount_in_cents` coincidan exactamente. Un conocido que no se puede consultar (404 o error) → `sin-decidir` (`estadoWompi: CONOCIDO_NO_CONSULTABLE`); no se descuenta por conteo.
+4. **Ambigüedad previa.** Si en la misma transacción hay ≥ 2 requests sin-id abiertos del mismo importe, todos → `sin-decidir` sin consultar nada.
+5. **Decisión sobre el único candidato restante** (misma tabla que con id): `APPROVED` → éxito; `DECLINED`/`ERROR`/`VOIDED` → fallo (mensaje fijo, nunca `status_message`, B-1061); `PENDING` dentro del margen (60 min) → esperar; `PENDING` vencido u otro estado → `sin-decidir`.
+6. **0 candidatos:** dentro del margen → esperar; vencido → `sin-decidir`. **> 1 candidato:** `sin-decidir` de inmediato.
+7. **Cierre.** Se reporta con el `pspReference` sin-id del request y su importe, `message` indicando que fue casado por importe y fecha sin id, y `log.warn` con `created_at` del item y los ids excluidos, para auditoría.
+Riesgos: aceptado dos reembolsos del mismo importe con created_at idéntico al ms; rechazado cerrar como fallo con 0 candidatos. Si el API añade `id` al embebido, el paso 3 pasa a exclusión por id.
+
+Implementación: `lib/decision-reembolso.ts` (casado y tabla de estados), `lib/refunds-embebidos.ts` (validación de la
+forma del dato externo; un item mal formado no cuenta). El `log.warn` de cierre lleva `casadoSinId: { createdAt, idsExcluidos }`
+(`idsExcluidos` = conocidos que efectivamente descartaron un candidato).
 
 ## Decisiones pendientes (Andrés)
 
@@ -86,7 +105,7 @@ del mismo importe son indistinguibles; por eso no se implementó el casado autom
 | Disparador | **Decidido** (B-412, Andrés 2026-10-07 + ruling de Fable): temporizador en proceso dentro de app-wompi, sin servicio nuevo; corre solo mientras el servicio está vivo | — |
 | Margen de anulaciones pendientes (B-1083) | 15 / 60 / 240 min | hoy 60 (`MARGEN_ANULACION_PENDIENTE_MIN`). Seguro: un `VOIDED` tardío tras un `CANCEL_FAILURE` sigue des-pagando con `CHARGE_FAILURE` |
 | Margen de reembolsos pendientes (B-1077) | 15 / 60 / 240 min | hoy 60 (`MARGEN_REEMBOLSO_PENDIENTE_MIN`). Vencido no cierra como fallo: pasa a revisión humana |
-| Reembolsos sin id (B-1077, B-1097) | seguir en revisión humana / casar contra `refunds[]` embebido en `GET /transactions/{id}` (sin `id`, solo importe + `created_at` + `status`) | hoy revisión humana. Listado dedicado: confirmado que NO existe (2026-10-09). El casado por el embebido exige un ruling nuevo: el criterio de B-1077 excluye ids ya vistos y aquí no hay id; con importes repetidos es ambiguo |
+| Reembolsos sin id (B-1077, B-1097) | revisión humana / casado contra `refunds[]` embebido | **Decidido (Fable, 2026-10-09): casado automático** con las reglas del ruling; ambigüedad → humano. Listado dedicado de reembolsos: confirmado que NO existe. Revisar si Wompi añade `id` al embebido (exclusión por id) |
 | `availableActions` tras `CANCEL_FAILURE` | `[]` / `['REFUND']` | hoy `[]`: deja Refund apagado. ¿`['REFUND']`? |
 
 ## Pendiente de verificación humana

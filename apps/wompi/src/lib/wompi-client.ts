@@ -41,6 +41,7 @@ export interface WompiRefund {
   status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'ERROR' | string
   amount_in_cents: number
   status_message?: string | null
+  created_at?: string
 }
 
 export interface WompiTransaction {
@@ -52,6 +53,11 @@ export interface WompiTransaction {
   payment_method_type: string
   redirect_url?: string
   created_at?: string
+  /**
+   * Solo en `GET /transactions/{id}` (B-1097). Dato externo sin validar: leer SIEMPRE con `refundsEmbebidos`
+   * (`refunds-embebidos.ts`), que descarta los items mal formados.
+   */
+  refunds?: unknown
 }
 
 /** Tope de páginas por consulta de conciliación: acota la corrida si el API pagina sin fin. */

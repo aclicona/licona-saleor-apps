@@ -141,9 +141,10 @@ plazo global `PLAZO_GLOBAL_MS` = 15 000 ms (margen de ~3 s) que **cuenta desde l
 
 Se reporta con el mismo `pspReference` e importe del request; si el importe de Wompi difiere, `warn`.
 
-**Caso sin id (limitación):** si el request lleva `pspReference` `<psp>:reembolso-sin-id:<uuid>` (no se llegó a
-conocer el id del reembolso), la conciliación NO consulta a Wompi: lo deja en `log.error` (`estadoWompi: SIN_ID`) para
-revisión humana. Confirmado el 2026-10-09 (B-1097) que Wompi NO tiene endpoint de listado de reembolsos (`GET /refunds?transaction_id=…`
-y variantes dan 404); `GET /transactions/{id}` trae `refunds[]` sin `id`, insuficiente para casar con seguridad
-(detalle en `conciliacion.md`). Sigue en revisión humana. Un operador debe
-verificar en Wompi antes de reintentar.
+**Caso sin id (B-1097):** si el request lleva `pspReference` `<psp>:reembolso-sin-id:<uuid>` (no se llegó a conocer
+el id del reembolso), la conciliación lo casa contra `refunds[]` de `GET /transactions/{psp}` por importe y fecha,
+excluyendo por `created_at` exacto los reembolsos ya conocidos. Wompi NO tiene endpoint de listado de reembolsos
+(confirmado en sandbox el 2026-10-09; `GET /refunds?transaction_id=…` y variantes dan 404) y el embebido no trae `id`.
+Un único candidato se decide con la misma tabla que el caso con id (mensaje con «casado por importe y fecha, sin id»);
+0 candidatos vencidos, varios candidatos, dos requests sin-id del mismo importe o un conocido no consultable quedan en
+`log.error` para revisión humana, nunca como fallo. Reglas completas (ruling de Fable) en `conciliacion.md`.

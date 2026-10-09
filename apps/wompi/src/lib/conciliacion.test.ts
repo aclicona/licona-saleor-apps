@@ -287,7 +287,7 @@ describe('conciliarTransaccionesWompi — paso de anulaciones (B-1083)', () => {
 describe('conciliarTransaccionesWompi — paso de reembolsos (B-1077)', () => {
   const BASE = ['revisadas', 'yaReportadas', 'reportadas', 'sinMapeo', 'omitidas', 'errores', 'errorApi', 'desde', 'hasta']
   const vacio = () => ({ saleorLector: { listarTransaccionesConSolicitud: vi.fn().mockResolvedValue([]) } })
-  const reembolsosCableados = () => ({ ...vacio(), politica: politicaReembolsos({ getRefund: vi.fn() }) })
+  const reembolsosCableados = () => ({ ...vacio(), politica: politicaReembolsos({ getRefund: vi.fn(), getTransaction: vi.fn() }) })
   const anulacionesCableadas = () => ({ ...vacio(), politica: politicaAnulaciones({ getTransaction: vi.fn() }) })
 
   it('el log lleva anulaciones y reembolsos; sin cablear reembolsos no aparece esa clave', async () => {

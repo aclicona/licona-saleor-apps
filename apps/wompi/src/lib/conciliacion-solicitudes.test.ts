@@ -188,6 +188,9 @@ describe('conciliarSolicitudesPendientes (reembolsos, B-1077)', () => {
 
   function wompiR(r: Partial<WompiRefund> | Error) {
     return {
+      getTransaction: vi.fn(async (): Promise<WompiTransaction> => {
+        throw new Error('el caso con id no consulta la transacción')
+      }),
       getRefund: vi.fn(async (id: string) => {
         if (r instanceof Error) throw r
         return { id, transaction_id: 'tx', status: 'APPROVED', amount_in_cents: 5000000, ...r } as WompiRefund
@@ -248,15 +251,7 @@ describe('conciliarSolicitudesPendientes (reembolsos, B-1077)', () => {
     expect(b.s.reportar).not.toHaveBeenCalled()
   })
 
-  it('psp sin id → sin decidir (SIN_ID) y no se llama a getRefund', async () => {
-    const w = wompiR({ status: 'APPROVED' })
-    const t = txR({ events: [reqReembolso({ pspReference: 'tx-1:reembolso-sin-id:abc-123' })] })
-    const { r, s, log } = await correrR([t], w)
-    expect(r.sinDecidir).toBe(1)
-    expect(w.getRefund).not.toHaveBeenCalled()
-    expect(s.reportar).not.toHaveBeenCalled()
-    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ estadoWompi: 'SIN_ID' }), expect.any(String))
-  })
+  // El caso «psp sin id» se cubre en reembolso-sin-id.test.ts (B-1097).
 
   it('refundPendingAmount 0 → no consulta; con un request ya cerrado solo cierra el abierto', async () => {
     const w = wompiR({ status: 'APPROVED' })

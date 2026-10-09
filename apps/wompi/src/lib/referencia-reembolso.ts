@@ -10,3 +10,9 @@ export const SEPARADOR_REEMBOLSO_SIN_ID = ':reembolso-sin-id:'
 export function esReferenciaSinId(psp: string): boolean {
   return psp.includes(SEPARADOR_REEMBOLSO_SIN_ID)
 }
+
+/** Psp de la transacción de Wompi: el prefijo antes del separador (`undefined` si no es una referencia sin id). */
+export function transaccionDeReferenciaSinId(psp: string): string | undefined {
+  const i = psp.indexOf(SEPARADOR_REEMBOLSO_SIN_ID)
+  return i > 0 ? psp.slice(0, i) : undefined
+}

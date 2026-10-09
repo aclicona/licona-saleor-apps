@@ -2,13 +2,14 @@ import { centsToCop } from './money.js'
 import { CODIGO_IMPORTE_INCONSISTENTE } from './saleor-errors.js'
 import type { LogConciliacion, ReportadorSaleor, VentanaConsulta } from './conciliacion.js'
 import type {
+  EventoTransaccionSaleor,
   SaleorTransactionEventType,
   TipoSolicitud,
   TransaccionConSolicitudes,
 } from './saleor-client.js'
 import { esReferenciaSinId } from './referencia-reembolso.js'
-import { WompiHttpError } from './wompi-error.js'
-import type { WompiRefund, WompiTransaction } from './wompi-client.js'
+import type { WompiTransaction } from './wompi-client.js'
+import { decidirReembolsoConId, decidirReembolsoSinId, type ConsultorWompiReembolsos } from './decision-reembolso.js'
 
 /**
  * Cierre de solicitudes que quedaron pendientes en Saleor (B-1083; reutilizable por B-1077).
@@ -44,20 +45,19 @@ export interface ConsultorTransaccionWompi {
   getTransaction(id: string): Promise<WompiTransaction>
 }
 
-export interface ConsultorReembolsoWompi {
-  getRefund(id: string): Promise<WompiRefund>
-}
 
 export interface SolicitudPendiente {
   transactionId: string
   pspReference: string
   importeCop: number
   creadaEn: Date
+  /** Eventos de la transacción en Saleor: la política de reembolsos sin id los usa para excluir los conocidos (B-1097). */
+  eventosTransaccion?: EventoTransaccionSaleor[]
 }
 
 export type Decision =
-  | { tipo: 'exito'; estadoWompi: string; mensaje: string; importeWompiCop?: number }
-  | { tipo: 'fallo'; estadoWompi: string; mensaje: string; importeWompiCop?: number }
+  | { tipo: 'exito'; estadoWompi: string; mensaje: string; importeWompiCop?: number; auditoria?: Record<string, unknown> }
+  | { tipo: 'fallo'; estadoWompi: string; mensaje: string; importeWompiCop?: number; auditoria?: Record<string, unknown> }
   | { tipo: 'esperar'; estadoWompi: string }
   | { tipo: 'sin-decidir'; estadoWompi: string }
 
@@ -155,7 +155,7 @@ async function cerrarSolicitud(
     } else {
       if (decision.tipo === 'exito') r.cerradasExito++
       else r.cerradasFallo++
-      log.warn({ ...conEstado, cierre: type }, 'Conciliación de solicitudes: se cerró una solicitud que había quedado pendiente en Saleor')
+      log.warn({ ...conEstado, ...decision.auditoria, cierre: type }, 'Conciliación de solicitudes: se cerró una solicitud que había quedado pendiente en Saleor')
     }
   } catch (error) {
     r.errores++
@@ -202,7 +202,7 @@ export async function conciliarSolicitudesPendientes(deps: {
     }
     for (const e of abiertas) {
       await cerrarSolicitud(
-        { transactionId: t.id, pspReference: e.pspReference as string, importeCop: e.amount, creadaEn: new Date(e.createdAt) },
+        { transactionId: t.id, pspReference: e.pspReference as string, importeCop: e.amount, creadaEn: new Date(e.createdAt), eventosTransaccion: t.events },
         { saleor, politica, ahora, log, r },
       )
     }
@@ -247,27 +247,16 @@ export function politicaAnulaciones(
   }
 }
 
-const MENSAJE_REEMBOLSO_OK = 'Wompi: reembolso confirmado (APPROVED)'
-const ESTADOS_REEMBOLSO_FALLIDO = new Set(['DECLINED', 'ERROR', 'VOIDED'])
-
-function importeReembolsoCop(r: WompiRefund): number | undefined {
-  try {
-    return centsToCop(r.amount_in_cents)
-  } catch {
-    return undefined
-  }
-}
-
 /**
- * Política de reembolsos (B-1077). Consulta `GET /refunds/{id}` con el psp del request:
- * APPROVED → éxito; DECLINED/ERROR/VOIDED → fallo (mensaje fijo, nunca `status_message` de Wompi, B-1061);
- * PENDING dentro del margen → esperar; PENDING vencido u otro estado → sin decidir (un reembolso PENDING
- * aún puede aprobarse, así que NO se cierra como fallo). 404 → sin decidir. Un psp sin id
- * (`:reembolso-sin-id:`) no se consulta: Wompi no tiene listado de reembolsos
- * (confirmado en sandbox el 2026-10-09, B-1097; ver docs/conciliacion.md): queda en revisión humana.
+ * Política de reembolsos (B-1077, B-1097). Con id: `GET /refunds/{id}`; APPROVED → éxito;
+ * DECLINED/ERROR/VOIDED → fallo (mensaje fijo, nunca `status_message` de Wompi, B-1061); PENDING dentro del
+ * margen → esperar; PENDING vencido u otro estado → sin decidir (un reembolso PENDING aún puede aprobarse, así
+ * que NO se cierra como fallo). 404 → sin decidir. Un psp sin id (`:reembolso-sin-id:`) se casa contra
+ * `refunds[]` de la transacción por importe y fecha (`decision-reembolso.ts`; Wompi no tiene listado de
+ * reembolsos, confirmado en sandbox el 2026-10-09; ver docs/conciliacion.md § «Reembolsos sin id»).
  */
 export function politicaReembolsos(
-  wompi: ConsultorReembolsoWompi,
+  wompi: ConsultorWompiReembolsos,
   margenMin: number = MARGEN_REEMBOLSO_PENDIENTE_MIN,
 ): PoliticaSolicitud {
   return {
@@ -275,25 +264,9 @@ export function politicaReembolsos(
     tipoExito: 'REFUND_SUCCESS',
     tipoFallo: 'REFUND_FAILURE',
     importePendiente: (t) => t.refundPendingAmount,
-    async decidir(s, ahora) {
-      if (esReferenciaSinId(s.pspReference)) return { tipo: 'sin-decidir', estadoWompi: 'SIN_ID' }
-      let reembolso: WompiRefund
-      try {
-        reembolso = await wompi.getRefund(s.pspReference)
-      } catch (error) {
-        if (error instanceof WompiHttpError && error.status === 404) return { tipo: 'sin-decidir', estadoWompi: 'HTTP_404' }
-        throw error
-      }
-      const estado = String(reembolso.status)
-      const importeWompiCop = importeReembolsoCop(reembolso)
-      if (estado === 'APPROVED') return { tipo: 'exito', estadoWompi: estado, mensaje: MENSAJE_REEMBOLSO_OK, importeWompiCop }
-      if (ESTADOS_REEMBOLSO_FALLIDO.has(estado)) {
-        return { tipo: 'fallo', estadoWompi: estado, mensaje: `Wompi no aprobó el reembolso (${estado})`, importeWompiCop }
-      }
-      if (estado === 'PENDING' && ahora.getTime() - s.creadaEn.getTime() <= margenMin * 60_000) {
-        return { tipo: 'esperar', estadoWompi: estado }
-      }
-      return { tipo: 'sin-decidir', estadoWompi: estado }
-    },
+    decidir: (s, ahora) =>
+      esReferenciaSinId(s.pspReference)
+        ? decidirReembolsoSinId(wompi, s, ahora, margenMin)
+        : decidirReembolsoConId(wompi, s, ahora, margenMin),
   }
 }
