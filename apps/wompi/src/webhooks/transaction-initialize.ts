@@ -1,18 +1,27 @@
 import { accionesParaResultado } from '../lib/acciones.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
-import { wompiClient } from '../lib/wompi-client.js'
+import { wompiClient, type WompiTransaction } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { referenciaParaWompi } from '../lib/referencia.js'
 import { validarDatosTarjeta } from '../lib/tarjeta.js'
-import { esRechazoDefinitivo } from '../lib/wompi-error.js'
+import { esRechazoDefinitivo, esReferenciaDuplicada } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
 
 /** Mensajes fijos hacia Saleor (B-1060): el texto del error real va solo al log. */
 const MENSAJE_SIN_TRANSACCION = 'No se pudo iniciar el pago con Wompi'
 const MENSAJE_RECHAZO = 'Wompi rechazó la transacción'
 const MENSAJE_DESCONOCIDO = 'Estado en Wompi desconocido por un fallo transitorio; se resolverá por conciliación'
+
+// Mismo mapa que `transaction-process.ts` / `wompi-incoming.ts` (VOIDED -> CHARGE_FAILURE es deliberado).
+const RESULTADO_POR_ESTADO: Record<string, string> = {
+  APPROVED: 'CHARGE_SUCCESS',
+  DECLINED: 'CHARGE_FAILURE',
+  ERROR: 'CHARGE_FAILURE',
+  VOIDED: 'CHARGE_FAILURE',
+  PENDING: 'CHARGE_ACTION_REQUIRED',
+}
 
 interface TransactionInitializePayload {
   transaction: { id: string; pspReference: string }
@@ -92,11 +101,12 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   // tempranos no dejan nada vivo) y se limpia en `finally`.
   // 'token': aún no existe nada en Wompi. 'crear': la transacción pudo crearse aunque la respuesta no llegue.
   let fase: 'token' | 'crear' = 'token'
+  let client: ReturnType<typeof wompiClient> | undefined
 
   try {
     // Saleor sends COP (e.g. 120000). Wompi expects centavos (12000000).
     const amountInCents = copToCents(action.amount)
-    const client = wompiClient()
+    client = wompiClient()
     const acceptanceToken = await client.getAcceptanceToken(plazo.signal)
 
     let paymentMethod: NonNullable<Parameters<typeof client.createTransaction>[0]['paymentMethod']>
@@ -163,8 +173,11 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       log.error({ err: error, fase, metodo: method, amount: action.amount }, 'No se pudo obtener el acceptance token de Wompi')
       return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: MENSAJE_SIN_TRANSACCION })
     }
-    // Rechazo cierto: 4xx al crear (422 referencia duplicada, 400 token inválido...).
-    if (esRechazoDefinitivo(error)) {
+    // B-1095: 422 «referencia duplicada» = la huérfana de un inicio ambiguo previo existe. No es un rechazo del
+    // comprador: se busca por `reference` y se responde con lo que Wompi tiene.
+    const duplicada = esReferenciaDuplicada(error)
+    // Rechazo cierto: 4xx al crear (422 por otro motivo, 400 token inválido...).
+    if (esRechazoDefinitivo(error) && !duplicada) {
       log.error({ err: error, status: error.status }, 'Wompi rechazó crear la transacción')
       return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO })
     }
@@ -173,9 +186,25 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     // el webhook de Wompi y la conciliación resuelven por `reference`, que no depende del pspReference.
     const nivel = plazo.signal.aborted ? 'warn' : 'error'
     log[nivel](
-      { err: error, reference, metodo: method, amount: action.amount },
-      'Estado de la transacción en Wompi desconocido; se responde CHARGE_ACTION_REQUIRED sin pspReference',
+      { err: error, reference, metodo: method, amount: action.amount, referenciaDuplicada: duplicada },
+      duplicada
+        ? 'Wompi: referencia duplicada al crear; se busca la transacción existente por reference'
+        : 'Estado de la transacción en Wompi desconocido; se intenta localizarla por reference',
     )
+    const existente = await buscarPorReferencia(client, reference, plazo.signal, log)
+    if (existente) {
+      const result = RESULTADO_POR_ESTADO[existente.status] ?? 'CHARGE_ACTION_REQUIRED'
+      log.info({ pspReference: existente.id, estadoWompi: existente.status, result }, 'Transacción localizada en Wompi por reference')
+      return reply.send({
+        result,
+        amount: action.amount,
+        pspReference: existente.id,
+        actions: accionesParaResultado(result),
+        ...(result === 'CHARGE_ACTION_REQUIRED'
+          ? { data: { ...(existente.redirect_url ? { redirectUrl: existente.redirect_url } : {}), wompiTransactionId: existente.id } }
+          : {}),
+      })
+    }
     return reply.send({
       result: 'CHARGE_ACTION_REQUIRED',
       amount: action.amount,
@@ -185,4 +214,27 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   } finally {
     plazo.limpiar()
   }
+}
+
+/**
+ * Busca en Wompi la transacción de esta `reference` (B-1095). Solo si queda plazo; devuelve la transacción únicamente
+ * si hay UNA coincidencia exacta. Cero (aún no indexada / nunca creada), varias (no debería: Wompi exige referencia
+ * única; no se adivina) o cualquier fallo -> `undefined`, y el llamador responde ACTION_REQUIRED sin pspReference.
+ */
+async function buscarPorReferencia(
+  client: { findTransactionsByReference(reference: string, plazo?: AbortSignal): Promise<WompiTransaction[]> } | undefined,
+  reference: string,
+  plazo: AbortSignal,
+  log: { warn: (o: object, m: string) => void; error: (o: object, m: string) => void },
+): Promise<WompiTransaction | undefined> {
+  if (!client || plazo.aborted) return undefined
+  try {
+    // Defensa en profundidad: aunque el cliente ya filtra, aquí no se mapea nada con otra referencia.
+    const exactas = (await client.findTransactionsByReference(reference, plazo)).filter((t) => t.reference === reference)
+    if (exactas.length === 1) return exactas[0]
+    log.warn({ reference, coincidencias: exactas.length }, 'Búsqueda por reference sin una coincidencia única; no se asocia ninguna transacción')
+  } catch (err) {
+    log.error({ err, reference }, 'Falló la búsqueda por reference en Wompi; se responde sin pspReference')
+  }
+  return undefined
 }

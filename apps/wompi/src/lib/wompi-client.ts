@@ -133,7 +133,7 @@ export class WompiClient {
     )
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new WompiHttpError(`Wompi ${res.status}: ${JSON.stringify(err)}`, res.status)
+      throw new WompiHttpError(`Wompi ${res.status}: ${JSON.stringify(err)}`, res.status, err)
     }
     return ((await res.json()) as { data: WompiTransaction }).data
   }
@@ -146,6 +146,27 @@ export class WompiClient {
     )
     if (!res.ok) throw new Error(`Wompi ${res.status}`)
     return ((await res.json()) as { data: WompiTransaction }).data
+  }
+
+  /**
+   * Busca transacciones por `reference` (B-1095): `GET /transactions?reference=<ref>`. Verificado en sandbox el
+   * 2026-10-09 que Wompi FILTRA (existente -> 1, inexistente -> 0), pero un parámetro no documentado puede dejar de
+   * respetarse: se vuelve a filtrar aquí por `reference` EXACTA y nunca se confía en el orden ni en `data[0]`
+   * (con el filtro ignorado sería la transacción de otro comprador). Lanza si Wompi responde no-2xx.
+   */
+  async findTransactionsByReference(reference: string, plazo?: AbortSignal): Promise<WompiTransaction[]> {
+    const qs = new URLSearchParams({ reference })
+    const res = await this.fetchWompi(
+      `${this.baseUrl}/transactions?${qs}`,
+      { headers: { Authorization: `Bearer ${this.config.privateKey}` } },
+      plazo,
+    )
+    if (!res.ok) throw new Error(`Wompi búsqueda por reference ${res.status}`)
+    const body = (await res.json()) as { data?: unknown }
+    const filas = Array.isArray(body.data) ? body.data : []
+    return filas.filter(
+      (t): t is WompiTransaction => typeof t === 'object' && t !== null && (t as WompiTransaction).reference === reference,
+    )
   }
 
   /**

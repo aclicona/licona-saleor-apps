@@ -61,7 +61,7 @@ Saleor son fijos; el texto del error va solo al log.
 | Situación | Respuesta |
 |---|---|
 | Cualquier fallo al obtener el acceptance token (fase `token`) | `CHARGE_FAILURE`, `message` fijo («No se pudo iniciar el pago con Wompi») |
-| Wompi devuelve 4xx al crear, excepto 408/429 (422 referencia duplicada, 400 token inválido...) | `CHARGE_FAILURE`, `message` fijo («Wompi rechazó la transacción») |
+| Wompi devuelve 4xx al crear, excepto 408/429 y excepto el 422 de referencia duplicada (422 por otro campo, 400 token inválido...) | `CHARGE_FAILURE`, `message` fijo («Wompi rechazó la transacción») |
 | Timeout/plazo, `fetch failed`, 5xx, 408/429 al crear | `CHARGE_ACTION_REQUIRED` sin `pspReference` ni `data`, `actions` vacío, `message` fijo («Estado en Wompi desconocido...»). Log `warn` si fue el plazo, `error` si no |
 
 Esquema de Saleor (fork): en `TransactionSessionActionRequiredSchema` el `psp_reference` es **opcional**;
@@ -74,10 +74,25 @@ Wompi (`wompi-incoming.ts`) y la conciliación (`conciliacion.ts`) casan por `re
 **Storefront:** con `CHARGE_ACTION_REQUIRED` sin `redirectUrl`, `pago.vue` muestra INCOMPLETE_RESPONSE y conserva
 la `idempotencyKey`.
 
-**Trampa del reintento (seguimiento pendiente):** si el comprador reintenta con la misma `idempotencyKey` y la
-transacción huérfana existe en Wompi, éste responde 422 «referencia duplicada» → `CHARGE_FAILURE`. No se pierde
-dinero (el webhook acredita por `reference`) pero el comprador queda en bucle. Pendiente: buscar por `reference`
-en Wompi tras verificar el filtro en el sandbox.
+**Reintento tras un inicio ambiguo (B-1095):** el comprador reintenta con la misma `idempotencyKey`, Saleor
+redespacha con la misma `reference` y, si la huérfana existe, Wompi responde
+`422 {"error":{"type":"INPUT_VALIDATION_ERROR","messages":{"reference":["La referencia ya ha sido usada"]}}}`
+(forma medida en sandbox el 2026-10-09). Se reconoce por status 422 **y** la clave `messages.reference`
+(`esReferenciaDuplicada`, `wompi-error.ts`; `WompiHttpError.cuerpo` guarda el cuerpo): un 422 por otro campo sigue
+siendo `CHARGE_FAILURE`. En ese caso (y también ante un estado desconocido que deje plazo, p. ej. `fetch failed`
+rápido) se busca la transacción con `findTransactionsByReference` y se responde con su estado:
+
+| Búsqueda | Respuesta |
+|---|---|
+| Una coincidencia exacta `APPROVED` / `PENDING` | `CHARGE_SUCCESS` (+`REFUND`) / `CHARGE_ACTION_REQUIRED`, con su `pspReference` (y `data.redirectUrl` si Wompi lo trae) |
+| Una coincidencia exacta `DECLINED` / `ERROR` / `VOIDED` | `CHARGE_FAILURE` con su `pspReference`: el estado es cierto (Wompi no admite reutilizar la referencia) |
+| 0 coincidencias, varias, error de red/5xx, o plazo agotado (no se busca) | `CHARGE_ACTION_REQUIRED` sin `pspReference` (el inicio ambiguo de siempre); **nunca** `CHARGE_FAILURE` |
+
+**Contrato medido (sandbox, 2026-10-09):** `GET /transactions?reference=<ref>` FILTRA de verdad (existente -> 1 fila,
+inexistente -> 0; sin `meta`). Aun así el cliente vuelve a filtrar por `reference` exacta y el handler exige UNA
+sola coincidencia: nunca se fía de `data[0]` (con el filtro ignorado sería la transacción de otro comprador). Varias
+coincidencias no deberían existir (Wompi exige referencia única); si pasaran, no se elige ninguna. La búsqueda usa la
+señal del plazo global: tras un timeout no hay presupuesto y no se intenta.
 
 ## Anulaciones: fallo de red ≠ `CANCEL_FAILURE` (B-1072)
 

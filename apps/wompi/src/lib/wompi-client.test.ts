@@ -275,3 +275,45 @@ describe('WompiClient — señal de plazo externa (B-1078)', () => {
     expect(error.status).toBe(422)
   })
 })
+
+describe('WompiClient.findTransactionsByReference — búsqueda por reference (B-1095)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+  const resp = (data: unknown[]) => ({ ok: true, json: () => Promise.resolve({ data }) })
+
+  it('envía reference codificada con la llave privada y devuelve la coincidencia exacta', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(resp([{ id: 'a', reference: 'ref/1 &x' }]))
+    vi.stubGlobal('fetch', fetchMock)
+    const r = await crearClientePrueba().findTransactionsByReference('ref/1 &x')
+    expect(r.map((t) => t.id)).toEqual(['a'])
+    expect(fetchMock.mock.calls[0][0]).toContain('/transactions?reference=ref%2F1+%26x')
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer prv_test_key')
+  })
+
+  it('descarta lo que no tenga la reference exacta aunque Wompi ignore el filtro', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resp([
+      { id: 'ajena', reference: 'otra' },
+      { id: 'prefijo', reference: 'ref-1-extra' },
+      { id: 'mia', reference: 'ref-1' },
+      null,
+    ])))
+    const r = await crearClientePrueba().findTransactionsByReference('ref-1')
+    expect(r.map((t) => t.id)).toEqual(['mia'])
+  })
+
+  it('sin coincidencias o sin data -> []', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
+    expect(await crearClientePrueba().findTransactionsByReference('x')).toEqual([])
+  })
+
+  it('no-ok lanza', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
+    await expect(crearClientePrueba().findTransactionsByReference('x')).rejects.toThrow('503')
+  })
+
+  it('createTransaction 422 conserva el cuerpo en WompiHttpError.cuerpo', async () => {
+    const cuerpo = { error: { type: 'INPUT_VALIDATION_ERROR', messages: { reference: ['ya usada'] } } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 422, json: () => Promise.resolve(cuerpo) }))
+    const e = await crearClientePrueba().createTransaction(PARAMS_CREAR).catch((x) => x)
+    expect(e.cuerpo).toEqual(cuerpo)
+  })
+})
