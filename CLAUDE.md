@@ -150,7 +150,7 @@ equivocado en silencio.
 
 Los webhooks de Saleor hacia las Apps usan **JWS/RS256** (Saleor firma con su RSA privada).
 
-El paquete compartido `packages/webhook-utils` (`@licona/webhook-utils`) expone `verifySaleorWebhook` para JWS. Úsarlo en todos los handlers de webhooks Saleor.
+El paquete compartido `packages/webhook-utils` (`@licona/webhook-utils`) expone `verifySaleorWebhook` para JWS. Úsarlo en todos los handlers de webhooks Saleor. Los síncronos además abren `crearPlazo()` en su primera línea (plazo de 15 s bajo los 18 s de Saleor, B-1078/B-1080); lo exige `contrato-plazo.test.ts` de cada app.
 
 ⚠️ **Los webhooks entrantes de las pasarelas NO son HMAC — al menos Wompi no lo es.** Esta línea
 decía "usan HMAC con su propio secret" y **era falsa**; indujo una implementación equivocada que se

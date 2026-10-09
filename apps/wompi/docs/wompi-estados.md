@@ -116,7 +116,7 @@ Wompi los reembolsos de la transacción**: la referencia generada no casa con ni
 
 ### Plazo global de 15 s (B-1078)
 
-`PLAZO_GLOBAL_MS` vive en `src/lib/plazo.ts`. Aplica también a `transaction-initialize` (firma + token + crear, B-1060), con la misma señal para ambas llamadas.
+`PLAZO_GLOBAL_MS` (alias en `src/lib/plazo.ts` de `PLAZO_WEBHOOK_SINCRONO_MS`) y el helper `crearPlazo()` viven en `@licona/webhook-utils` (B-1080). Aplica a **todos** los handlers síncronos que llaman a Wompi: `transaction-refund`, `transaction-initialize` (firma + token + crear, B-1060, misma señal para ambas llamadas), `transaction-process` y `transaction-cancel`. Un webhook síncrono nuevo debe llamar `crearPlazo()` en su primera línea; `src/webhooks/contrato-plazo.test.ts` (y su gemelo en `apps/envios`) lo exige para cada `syncEvents` del manifiesto y falla si falta uno, si algo se pasa de 15 s con la firma en su peor caso (5 s de JWKS), o si una excepción de su lista `EXCEPCIONES` ya se cumple.
 
 Saleor espera 18 s la respuesta síncrona del webhook y, pasado ese tiempo, registra `REFUND_FAILURE`
 («Failed to delivery request.») aunque el reembolso ya exista en Wompi. Cada llamada a Wompi tiene su propio timeout
