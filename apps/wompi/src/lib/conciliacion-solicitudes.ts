@@ -263,7 +263,8 @@ function importeReembolsoCop(r: WompiRefund): number | undefined {
  * APPROVED → éxito; DECLINED/ERROR/VOIDED → fallo (mensaje fijo, nunca `status_message` de Wompi, B-1061);
  * PENDING dentro del margen → esperar; PENDING vencido u otro estado → sin decidir (un reembolso PENDING
  * aún puede aprobarse, así que NO se cierra como fallo). 404 → sin decidir. Un psp sin id
- * (`:reembolso-sin-id:`) no se consulta: no hay endpoint de listado confirmado, queda en revisión humana.
+ * (`:reembolso-sin-id:`) no se consulta: Wompi no tiene listado de reembolsos
+ * (confirmado en sandbox el 2026-10-09, B-1097; ver docs/conciliacion.md): queda en revisión humana.
  */
 export function politicaReembolsos(
   wompi: ConsultorReembolsoWompi,

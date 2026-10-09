@@ -59,7 +59,22 @@ Mismo motor, tras las anulaciones y antes del log final: cierra los `REFUND_REQU
 opcional `reembolsos` (misma forma que `anulaciones`); un `errorApi` de anulaciones no impide que corran.
 
 - **Sin id:** un request con psp `...:reembolso-sin-id:...` no se consulta (no hay id); queda en `log.error`
-  (`estadoWompi: SIN_ID`) para revisión humana. No se inventó un endpoint de listado: pendiente de confirmar uno.
+  (`estadoWompi: SIN_ID`) para revisión humana. Confirmado el 2026-10-09 contra el sandbox (B-1097): Wompi NO tiene
+  endpoint de listado de reembolsos; solo `GET /transactions/{id}` trae `refunds[]` embebido, sin `id` (ver abajo).
+
+### Reembolsos sin id: evidencia del sandbox (B-1097, 2026-10-09)
+
+Probado con transacción APPROVED de sandbox y dos `POST /refunds` del mismo importe:
+
+| Petición | HTTP | Resultado |
+|---|---|---|
+| `GET /refunds?transaction_id=…` (con y sin `page`/`page_size`), `GET /refunds`, `GET /refunds?from_date&until_date`, `GET /refunds?reference=…` | 404, cuerpo vacío | no existe listado de reembolsos |
+| `GET /transactions/{id}/refunds`, `GET /transactions/{id}/refund` | 404, cuerpo vacío | no existe |
+| `GET /refunds/{id}` | 200 | `data`: `id, created_at, transaction_id, status, amount_in_cents, status_message, external_identifier, is_sandbox, sandbox_test_scenario, cancelled_at` |
+| `GET /transactions/{id}` | 200 | `data.refunds[]` embebido, cada item solo `created_at, transaction_id, status, amount_in_cents, status_message` (**sin `id`**); el `status` se actualiza (`PENDING` → `APPROVED`) |
+
+El objeto refund SÍ trae `created_at`. Como el embebido no trae `id`, no se pueden excluir los ya conocidos y dos reembolsos
+del mismo importe son indistinguibles; por eso no se implementó el casado automático.
 
 ## Decisiones pendientes (Andrés)
 
@@ -71,7 +86,7 @@ opcional `reembolsos` (misma forma que `anulaciones`); un `errorApi` de anulacio
 | Disparador | **Decidido** (B-412, Andrés 2026-10-07 + ruling de Fable): temporizador en proceso dentro de app-wompi, sin servicio nuevo; corre solo mientras el servicio está vivo | — |
 | Margen de anulaciones pendientes (B-1083) | 15 / 60 / 240 min | hoy 60 (`MARGEN_ANULACION_PENDIENTE_MIN`). Seguro: un `VOIDED` tardío tras un `CANCEL_FAILURE` sigue des-pagando con `CHARGE_FAILURE` |
 | Margen de reembolsos pendientes (B-1077) | 15 / 60 / 240 min | hoy 60 (`MARGEN_REEMBOLSO_PENDIENTE_MIN`). Vencido no cierra como fallo: pasa a revisión humana |
-| Reembolsos sin id (B-1077) | confirmar con Wompi un endpoint de listado de reembolsos por transacción / seguir en revisión humana | hoy revisión humana; sin endpoint confirmado no se automatiza |
+| Reembolsos sin id (B-1077, B-1097) | seguir en revisión humana / casar contra `refunds[]` embebido en `GET /transactions/{id}` (sin `id`, solo importe + `created_at` + `status`) | hoy revisión humana. Listado dedicado: confirmado que NO existe (2026-10-09). El casado por el embebido exige un ruling nuevo: el criterio de B-1077 excluye ids ya vistos y aquí no hay id; con importes repetidos es ambiguo |
 | `availableActions` tras `CANCEL_FAILURE` | `[]` / `['REFUND']` | hoy `[]`: deja Refund apagado. ¿`['REFUND']`? |
 
 ## Pendiente de verificación humana

@@ -143,5 +143,7 @@ Se reporta con el mismo `pspReference` e importe del request; si el importe de W
 
 **Caso sin id (limitación):** si el request lleva `pspReference` `<psp>:reembolso-sin-id:<uuid>` (no se llegó a
 conocer el id del reembolso), la conciliación NO consulta a Wompi: lo deja en `log.error` (`estadoWompi: SIN_ID`) para
-revisión humana. Queda así hasta confirmar un endpoint de listado de reembolsos por transacción. Un operador debe
+revisión humana. Confirmado el 2026-10-09 (B-1097) que Wompi NO tiene endpoint de listado de reembolsos (`GET /refunds?transaction_id=…`
+y variantes dan 404); `GET /transactions/{id}` trae `refunds[]` sin `id`, insuficiente para casar con seguridad
+(detalle en `conciliacion.md`). Sigue en revisión humana. Un operador debe
 verificar en Wompi antes de reintentar.
