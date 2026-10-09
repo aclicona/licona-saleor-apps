@@ -107,6 +107,37 @@ cualquier evento `REFUND_REQUEST/SUCCESS/FAILURE` (abierto o cerrado, distinto d
 `sin-decidir` (`SIN_ID_AMBIGUO`) sin consultar a Wompi. Si del otro no se ve su `REFUND_REQUEST`, se asume solapado.
 Además, los conocidos se limitan a `REFUND_REQUEST/SUCCESS/FAILURE` (no `REFUND_REVERSE`).
 
+## Prueba de contrato contra el sandbox (B-1100)
+
+Los reembolsos sin id (B-1097) dependen de hechos que NO están en la doc pública de Wompi y se midieron en sandbox
+el 2026-10-09. Si Wompi los cambia, la exclusión de conocidos fallaría en silencio. La prueba de contrato los vigila.
+
+**Qué comprueba** (crea una transacción de 50.000 COP en sandbox con la tarjeta de prueba, hace 2 reembolsos
+parciales de 10.000 COP, espera unos segundos y lee):
+1. `GET /transactions/{id}` trae `refunds[]` y cada item trae `created_at` (parseable), `amount_in_cents` y `status`.
+2. Cada `GET /refunds/{id}` tiene un único gemelo en `refunds[]` con el mismo `created_at` y el mismo importe.
+   Se compara como **epoch ms (`Date.parse`)**, no como texto: es exactamente lo que hace la conciliación
+   (`refunds-embebidos.ts`), así que una diferencia solo de formato (`.472Z` vs `.472000Z`) no es rojo.
+3. `GET /refunds?transaction_id=` y `GET /transactions/{id}/refunds` siguen respondiendo 404. Si dejan de hacerlo, la
+   causa `listado_disponible:<ruta>:<http>` avisa de que ya se podría excluir por id (rojo para que alguien lo mire).
+
+**Cómo correrla** (desde `apps/wompi`, con `.env` de sandbox):
+
+```sh
+pnpm contrato:sandbox
+```
+
+Imprime UNA línea TSV `<estado>\t<causas|->\t<fecha ISO>\t<detalle>` y sale con 0 (verde), 1 (rojo) o 2 (sin_medida:
+red, llaves ausentes, 401, transacción no aprobada). Guarda dura: si `WOMPI_PRIVATE_KEY` no empieza por `prv_test_` o
+`WOMPI_PUBLIC_KEY` por `pub_test_`, no llama a nada (nunca contra producción). Nunca imprime llaves ni headers.
+Lógica de decisión (pura, con tests): `src/lib/contrato-sandbox.ts`; script: `scripts/contrato-sandbox.ts`.
+
+**Qué hacer en rojo:** no tocar la conciliación a ciegas. Releer la causa, repetir la prueba una vez (descartar
+latencia), y si persiste, reabrir el ruling de B-1097 (regla 3: exclusión de conocidos por `created_at` exacto) con la
+nueva forma del API. `sin_medida` no es un veredicto: repetir más tarde.
+
+**Estado:** aún no está programada (se corre a mano). Programarla periódicamente queda pendiente.
+
 ## Decisiones pendientes (Andrés)
 
 | Tema | Opciones | Recomendación |

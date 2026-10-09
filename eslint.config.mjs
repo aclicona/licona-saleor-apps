@@ -46,6 +46,14 @@ export default tseslint.config(
   },
 
   {
+    // Scripts TS de operación (p. ej. apps/wompi/scripts/contrato-sandbox.ts, B-1100): fuera de `src` y de los
+    // tsconfig, así que solo se les da el parser de TypeScript (sin reglas con tipos).
+    name: 'licona/scripts-ts',
+    files: ['apps/*/scripts/**/*.ts'],
+    extends: [tseslint.configs.base],
+  },
+
+  {
     // Reglas con información de tipos: sólo sobre el código fuente real de
     // los tres paquetes. `projectService` resuelve el tsconfig de cada uno.
     name: 'licona/correccion-tipada',
