@@ -74,8 +74,9 @@ esos cuatro comandos en ese orden.
 **Tests en un worktree limpio (B-1073):** `apps/wompi/vitest.config.ts` y `apps/envios/vitest.config.ts`
 resuelven `@licona/webhook-utils` desde `packages/webhook-utils/src` (alias), no desde su `dist`, así que
 los tests nunca dependen de un build previo ni del dist de otro checkout. Basta `pnpm install
---frozen-lockfile` y `pnpm --filter @licona/app-wompi test`. `pnpm typecheck` y `build` sí siguen
-necesitando `pnpm -r build` (los tipos salen de `dist`).
+--frozen-lockfile` y `pnpm --filter @licona/app-wompi test`. Los tipos sí salen del `dist` de
+`webhook-utils`, por eso (B-1118) `pnpm --filter @licona/app-wompi typecheck` (y `@licona/app-envios`) y el
+`pnpm typecheck` raíz compilan antes `webhook-utils`: un `dist` rancio ya no da TS2305/TS2339 falsos.
 **Logging en `apps/envios`:** el handler de envíos usa el mismo patrón que los de wompi: `req.log.child`
 con `webhook` y las claves canónicas de correlación (`checkoutId`, en `lib/correlacion.ts`), y los
 fallos de firma se escriben como `log.warn({ motivo: err.reason }, err.message)` — no con `msg` dentro

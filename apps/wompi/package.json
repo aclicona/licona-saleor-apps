@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "typecheck": "pnpm --filter @licona/webhook-utils build && tsc --noEmit",
     "contrato:sandbox": "node --env-file=.env --import tsx/esm scripts/contrato-sandbox.ts"
   },
   "dependencies": {

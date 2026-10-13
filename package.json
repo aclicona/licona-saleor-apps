@@ -10,7 +10,7 @@
     "check:subscriptions": "node scripts/validar-subscriptions.mjs",
     "check:dockerfiles": "node scripts/check-dockerfiles.mjs",
     "test": "pnpm -r --if-present --no-bail test",
-    "typecheck": "pnpm -r exec tsc --noEmit"
+    "typecheck": "pnpm --filter @licona/webhook-utils build && pnpm -r exec tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

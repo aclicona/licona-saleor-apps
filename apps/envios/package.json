@@ -7,7 +7,8 @@
     "dev": "node --env-file=.env --import tsx/esm --watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "pnpm --filter @licona/webhook-utils build && tsc --noEmit"
   },
   "dependencies": {
     "@licona/webhook-utils": "workspace:*",
