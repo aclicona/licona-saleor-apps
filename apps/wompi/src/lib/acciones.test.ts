@@ -26,6 +26,10 @@ describe('acciones declaradas a Saleor (B-432)', () => {
     expect(accionesParaEvento('CHARGE_FAILURE')).toEqual([])
     expect(accionesParaEvento('CANCEL_SUCCESS')).toEqual([])
   })
+  it('evento: CANCEL_FAILURE mantiene REFUND (el cobro sigue en pie, B-1089); CANCEL_SUCCESS no', () => {
+    expect(accionesParaEvento('CANCEL_FAILURE')).toEqual(['REFUND'])
+    expect(accionesParaEvento('CANCEL_SUCCESS')).toEqual([])
+  })
 })
 
 describe('reportTransactionEvent envía availableActions', () => {
@@ -42,6 +46,13 @@ describe('reportTransactionEvent envía availableActions', () => {
     expect(arg.variables.availableActions).toEqual(['REFUND'])
     expect(arg.document).toContain('$availableActions: [TransactionActionEnum!]')
     expect(arg.document).toContain('availableActions: $availableActions')
+  })
+
+  it('CANCEL_FAILURE (anulación vencida de la conciliación) → [REFUND]; CANCEL_SUCCESS → [] (B-1089)', async () => {
+    await reportTransactionEvent({ transactionId: 'x', type: 'CANCEL_FAILURE', amount: 1, pspReference: 'p' })
+    expect(request.mock.calls[0][0].variables.availableActions).toEqual(['REFUND'])
+    await reportTransactionEvent({ transactionId: 'x', type: 'CANCEL_SUCCESS', amount: 1, pspReference: 'p' })
+    expect(request.mock.calls[1][0].variables.availableActions).toEqual([])
   })
 
   it('CHARGE_FAILURE → []', async () => {

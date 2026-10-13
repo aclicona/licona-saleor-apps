@@ -106,9 +106,9 @@ señal del plazo global: tras un timeout no hay presupuesto y no se intenta.
 | Situación | Respuesta |
 |---|---|
 | Sin `pspReference` en el payload | `CANCEL_FAILURE`, `message` fijo («Sin pspReference») |
-| Wompi devuelve 4xx de validación (excepto 408/429) | `CANCEL_FAILURE`, `message` fijo («Wompi rechazó la solicitud de anulación») |
+| Wompi devuelve 4xx de validación (excepto 408/429) | `CANCEL_FAILURE`, `message` fijo («Wompi rechazó la solicitud de anulación») y `actions: ['REFUND']` (B-1089) |
 | Timeout, `fetch failed`, 5xx, 408/429 | sin `result`, `pspReference` = el de la transacción (respuesta asíncrona: deja `CANCEL_REQUEST`, no final) |
-| `CANCEL_REQUEST` que quedó pendiente → lo cierra la conciliación (B-1083) | Wompi `VOIDED` → `CANCEL_SUCCESS`; `APPROVED` pasado el margen (`MARGEN_ANULACION_PENDIENTE_MIN`, 60 min desde el request) → `CANCEL_FAILURE` con `message` fijo («La anulación no se aplicó en Wompi (sigue APPROVED pasado el margen)»); `APPROVED` dentro del margen → se espera; cualquier otro estado → no se decide, `log.error` y revisión humana. Se reporta con el mismo `pspReference` e importe del request |
+| `CANCEL_REQUEST` que quedó pendiente → lo cierra la conciliación (B-1083) | Wompi `VOIDED` → `CANCEL_SUCCESS`; `APPROVED` pasado el margen (`MARGEN_ANULACION_PENDIENTE_MIN`, 60 min desde el request) → `CANCEL_FAILURE` con `message` fijo («La anulación no se aplicó en Wompi (sigue APPROVED pasado el margen)»); `APPROVED` dentro del margen → se espera; cualquier otro estado → no se decide, `log.error` y revisión humana. Se reporta con el mismo `pspReference` e importe del request. Tras `CANCEL_FAILURE` se declara `availableActions: ['REFUND']` (B-1089): el panel ofrece Reembolsar sin recargar |
 
 La anulación pudo aplicarse en Wompi, por eso el estado desconocido no se cierra como fallido. Se concilia
 (`docs/conciliacion.md` → «Solicitudes pendientes»). El texto del error va solo al log.

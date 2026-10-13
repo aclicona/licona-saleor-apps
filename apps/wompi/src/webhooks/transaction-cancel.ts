@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
 import { wompiClient } from '../lib/wompi-client.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
+import { accionesParaEvento } from '../lib/acciones.js'
 import { esRechazoDefinitivo } from '../lib/wompi-error.js'
 
 interface TransactionCancelPayload {
@@ -45,7 +46,8 @@ export async function transactionCancelHandler(req: FastifyRequest, reply: Fasti
     // Rechazo cierto: un 4xx de validación (excepto 408/429) = la anulación no se aplicó.
     if (esRechazoDefinitivo(error)) {
       log.error({ err: error, status: error.status, amount: action.amount }, 'Wompi rechazó la anulación')
-      return reply.send({ result: 'CANCEL_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO })
+      // B-1089: Wompi rechazó anular, el cobro sigue en pie → que el Dashboard ofrezca Reembolsar.
+      return reply.send({ result: 'CANCEL_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO, actions: accionesParaEvento('CANCEL_FAILURE') })
     }
     // B-1072: CANCEL_FAILURE es final en Saleor. Un timeout, un fallo de red, un 5xx
     // o un 408/429 dejan el estado DESCONOCIDO (la anulación pudo aplicarse en Wompi).

@@ -120,6 +120,8 @@ describe('conciliarSolicitudesPendientes (anulaciones)', () => {
       pspReference: 'psp-A',
       message: 'La anulación no se aplicó en Wompi (sigue APPROVED pasado el margen)',
     })
+    // B-1089: sin `availableActions` explícito, para que rija el default de `accionesParaEvento` (REFUND).
+    expect(vi.mocked(s.reportar).mock.calls[0][0]).not.toHaveProperty('availableActions')
     expect(r.cerradasFallo).toBe(1)
   })
 

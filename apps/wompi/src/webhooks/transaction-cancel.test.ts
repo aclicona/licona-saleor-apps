@@ -74,6 +74,7 @@ describe('transactionCancelHandler (B-1072)', () => {
     const { payload, log } = await correr()
     expect(payload.result).toBe('CANCEL_FAILURE')
     expect(payload.amount).toBe(3000)
+    expect(payload.actions).toEqual(['REFUND']) // B-1089: el cobro sigue en pie
     expect(JSON.stringify(payload)).not.toContain(TEXTO_INTERNO)
     expect(log.error).toHaveBeenCalled()
   })

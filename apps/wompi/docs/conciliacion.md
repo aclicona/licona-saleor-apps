@@ -215,7 +215,7 @@ cuyo `message` contiene «revisión humana» (sin distinguir mayúsculas).
 | Margen de anulaciones pendientes (B-1083) | 15 / 60 / 240 min | hoy 60 (`MARGEN_ANULACION_PENDIENTE_MIN`). Seguro: un `VOIDED` tardío tras un `CANCEL_FAILURE` sigue des-pagando con `CHARGE_FAILURE` |
 | Margen de reembolsos pendientes (B-1077) | 15 / 60 / 240 min | hoy 60 (`MARGEN_REEMBOLSO_PENDIENTE_MIN`). Vencido no cierra como fallo: pasa a revisión humana |
 | Reembolsos sin id (B-1077, B-1097) | revisión humana / casado contra `refunds[]` embebido | **Decidido (Fable, 2026-10-09): casado automático** con las reglas del ruling; ambigüedad → humano. Listado dedicado de reembolsos: confirmado que NO existe. Revisar si Wompi añade `id` al embebido (exclusión por id) |
-| `availableActions` tras `CANCEL_FAILURE` | `[]` / `['REFUND']` | hoy `[]`: deja Refund apagado. ¿`['REFUND']`? |
+| `availableActions` tras `CANCEL_FAILURE` | `[]` / `['REFUND']` | **Decidido (Andrés, B-1089): `['REFUND']`**. Con `[]` el panel perdía Refund aunque Wompi siguiera `APPROVED`; ahora `accionesParaEvento('CANCEL_FAILURE')` lo mantiene (conciliación y webhook síncrono) |
 
 ## Pendiente de verificación humana
 
