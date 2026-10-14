@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "fallo_rechazo",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 120000,
+    "message": "Wompi rechazó la transacción"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "fallo_moneda",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 120000,
+    "message": "Wompi no soporta USD. El canal debe usar moneda COP."
+  }
+}

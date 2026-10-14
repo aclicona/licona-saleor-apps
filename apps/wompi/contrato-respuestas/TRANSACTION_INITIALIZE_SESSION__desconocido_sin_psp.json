@@ -1,0 +1,10 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "desconocido_sin_psp",
+  "respuesta": {
+    "result": "CHARGE_ACTION_REQUIRED",
+    "amount": 120000,
+    "actions": [],
+    "message": "Estado en Wompi desconocido por un fallo transitorio; se resolverá por conciliación"
+  }
+}

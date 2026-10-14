@@ -1,0 +1,17 @@
+{
+  "evento": "PAYMENT_GATEWAY_INITIALIZE_SESSION",
+  "caso": "exito",
+  "respuesta": {
+    "data": {
+      "publicKey": "pub_test_clave",
+      "methods": [
+        "CARD",
+        "PSE",
+        "NEQUI",
+        "DAVIPLATA",
+        "BANCOLOMBIA_TRANSFER"
+      ],
+      "currency": "COP"
+    }
+  }
+}

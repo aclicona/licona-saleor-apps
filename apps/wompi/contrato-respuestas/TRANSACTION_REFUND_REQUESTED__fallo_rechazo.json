@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_REFUND_REQUESTED",
+  "caso": "fallo_rechazo",
+  "respuesta": {
+    "result": "REFUND_FAILURE",
+    "amount": 3000,
+    "message": "Wompi rechazó la solicitud de reembolso"
+  }
+}

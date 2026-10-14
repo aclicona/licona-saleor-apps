@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_CANCELATION_REQUESTED",
+  "caso": "fallo_sin_psp",
+  "respuesta": {
+    "result": "CANCEL_FAILURE",
+    "amount": 3000,
+    "message": "Sin pspReference"
+  }
+}

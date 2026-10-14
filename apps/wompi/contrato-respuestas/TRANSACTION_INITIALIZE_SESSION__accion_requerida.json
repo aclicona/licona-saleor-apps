@@ -1,0 +1,14 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "accion_requerida",
+  "respuesta": {
+    "result": "CHARGE_ACTION_REQUIRED",
+    "amount": 120000,
+    "pspReference": "wompi-txn-12345",
+    "actions": [],
+    "data": {
+      "redirectUrl": "https://checkout.wompi.co/l/abc123",
+      "wompiTransactionId": "wompi-txn-12345"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "evento": "TRANSACTION_PROCESS_SESSION",
+  "caso": "fallo",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 3000,
+    "pspReference": "12084641-1791286722-99200",
+    "actions": []
+  }
+}

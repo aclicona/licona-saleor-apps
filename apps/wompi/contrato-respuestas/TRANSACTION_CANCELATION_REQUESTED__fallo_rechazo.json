@@ -1,0 +1,12 @@
+{
+  "evento": "TRANSACTION_CANCELATION_REQUESTED",
+  "caso": "fallo_rechazo",
+  "respuesta": {
+    "result": "CANCEL_FAILURE",
+    "amount": 3000,
+    "message": "Wompi rechazó la solicitud de anulación",
+    "actions": [
+      "REFUND"
+    ]
+  }
+}

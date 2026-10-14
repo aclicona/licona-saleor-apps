@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_REFUND_REQUESTED",
+  "caso": "fallo_sin_psp",
+  "respuesta": {
+    "result": "REFUND_FAILURE",
+    "amount": 3000,
+    "message": "Sin pspReference"
+  }
+}

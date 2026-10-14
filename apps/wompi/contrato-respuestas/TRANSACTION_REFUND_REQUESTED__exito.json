@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_REFUND_REQUESTED",
+  "caso": "exito",
+  "respuesta": {
+    "result": "REFUND_SUCCESS",
+    "amount": 3000,
+    "pspReference": "30954"
+  }
+}

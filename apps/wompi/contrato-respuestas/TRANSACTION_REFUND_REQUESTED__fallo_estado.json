@@ -1,0 +1,10 @@
+{
+  "evento": "TRANSACTION_REFUND_REQUESTED",
+  "caso": "fallo_estado",
+  "respuesta": {
+    "result": "REFUND_FAILURE",
+    "amount": 3000,
+    "pspReference": "30954",
+    "message": "Saldo insuficiente"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "evento": "TRANSACTION_PROCESS_SESSION",
+  "caso": "desconocido",
+  "respuesta": {
+    "result": "CHARGE_ACTION_REQUIRED",
+    "amount": 3000,
+    "pspReference": "12084641-1791286722-99200",
+    "actions": [],
+    "message": "Estado en Wompi desconocido por un fallo transitorio; se reintentará"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "evento": "TRANSACTION_REFUND_REQUESTED",
+  "caso": "asincrono_pendiente",
+  "respuesta": {
+    "pspReference": "30954"
+  }
+}

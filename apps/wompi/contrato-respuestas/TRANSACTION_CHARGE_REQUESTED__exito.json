@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_CHARGE_REQUESTED",
+  "caso": "exito",
+  "respuesta": {
+    "result": "CHARGE_SUCCESS",
+    "amount": 3000,
+    "pspReference": "12084641-1791286722-99200"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_PROCESS_SESSION",
+  "caso": "fallo_sin_psp",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 3000,
+    "message": "Sin transacción activa"
+  }
+}

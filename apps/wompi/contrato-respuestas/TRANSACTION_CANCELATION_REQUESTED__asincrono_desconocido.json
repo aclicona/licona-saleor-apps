@@ -1,0 +1,7 @@
+{
+  "evento": "TRANSACTION_CANCELATION_REQUESTED",
+  "caso": "asincrono_desconocido",
+  "respuesta": {
+    "pspReference": "12084641-1791286722-99200"
+  }
+}

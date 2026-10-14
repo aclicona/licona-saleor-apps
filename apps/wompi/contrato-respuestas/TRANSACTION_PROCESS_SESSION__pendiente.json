@@ -1,0 +1,10 @@
+{
+  "evento": "TRANSACTION_PROCESS_SESSION",
+  "caso": "pendiente",
+  "respuesta": {
+    "result": "CHARGE_ACTION_REQUIRED",
+    "amount": 3000,
+    "pspReference": "12084641-1791286722-99200",
+    "actions": []
+  }
+}

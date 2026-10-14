@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "fallo_sin_token",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 120000,
+    "message": "No se pudo iniciar el pago con Wompi"
+  }
+}
