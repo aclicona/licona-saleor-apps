@@ -231,3 +231,48 @@ describe('webhook entrante de Wompi', () => {
     await app.close()
   })
 })
+
+describe('duración de la verificación de firma (B-1109)', () => {
+  const sincronos = new Set(['transaction-initialize', 'transaction-process', 'transaction-refund', 'transaction-cancelation'])
+
+  it.each([
+    ['payment-gateway-initialize', { sourceObject: { id: CHECKOUT_ID }, data: {}, amount: 120000 }],
+    [
+      'transaction-initialize',
+      {
+        transaction: { id: TRANSACTION_ID, pspReference: '' },
+        sourceObject: { id: CHECKOUT_ID, email: 'cliente@example.com' },
+        action: { amount: 120000, currency: 'COP' },
+        data: { method: 'PSE' },
+      },
+    ],
+    ['transaction-process', payloadTransaccion],
+    ['transaction-charge', payloadTransaccion],
+    ['transaction-refund', payloadTransaccion],
+    ['transaction-cancelation', payloadTransaccion],
+  ])('%s deja "Firma verificada" con firmaMs numérico y sin datos sensibles', async (ruta, payload) => {
+    const { app, lineasDelHandler } = servidor()
+
+    await app.inject({ method: 'POST', url: `/${ruta}`, payload, headers: { 'saleor-signature': 'cabecera..firma-secreta' } })
+
+    const linea = lineasDelHandler().find((l) => l.msg === 'Firma verificada')
+    expect(linea).toBeDefined()
+    expect(typeof linea!.firmaMs).toBe('number')
+    expect(linea!.firmaMs as number).toBeGreaterThanOrEqual(0)
+    // Los webhooks síncronos con plazo global informan también cuánto queda.
+    if (sincronos.has(ruta)) expect(typeof linea!.restanteMs).toBe('number')
+    else expect(linea).not.toHaveProperty('restanteMs')
+    expect(JSON.stringify(linea)).not.toContain('firma-secreta')
+    await app.close()
+  })
+
+  it('con firma inválida no se loguea "Firma verificada"', async () => {
+    vi.mocked(verifySaleorWebhook).mockRejectedValue(new SaleorWebhookError('x', undefined, 'invalid_signature'))
+    const { app, lineasDelHandler } = servidor()
+
+    await app.inject({ method: 'POST', url: '/transaction-process', payload: payloadTransaccion })
+
+    expect(lineasDelHandler().some((l) => l.msg === 'Firma verificada')).toBe(false)
+    await app.close()
+  })
+})

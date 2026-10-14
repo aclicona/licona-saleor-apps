@@ -31,7 +31,10 @@ export async function transactionProcessHandler(req: FastifyRequest, reply: Fast
   log.info('Webhook de Saleor recibido')
 
   try {
+    // B-1109: la firma en frío (primer fetch del JWKS) es el tramo del plazo que no se veía en logs.
+    const inicioFirma = Date.now()
     await verifySaleorWebhook((req as any).rawBody, req.headers['saleor-signature'] as string, process.env.SALEOR_API_URL ?? '')
+    log.info({ firmaMs: Date.now() - inicioFirma, restanteMs: plazo.restanteMs() }, 'Firma verificada')
   } catch (e) {
     // `reason` distingue "clave rotada, se resuelve sola" de "alguien está
     // probando suerte": son incidentes distintos y sin esto se ven igual.
