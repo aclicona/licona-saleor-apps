@@ -39,8 +39,25 @@ export const CODIGO_TRANSACCION_INEXISTENTE = 'NOT_FOUND'
  * Códigos que Saleor devuelve en las extensiones de un error GraphQL de nivel
  * superior cuando el problema es de autenticación/autorización. Saleor
  * responde HTTP 200 con estos, así que el status no basta para detectarlos.
+ *
+ * No son un enum del schema: son `type(exc).__name__` de la excepción que el
+ * fork serializa en `format_error` (B-1336; candado en el root:
+ * `scripts/contrato-errores-auth/validar.py`).
+ *
+ * Con el token de App (30 caracteres, no es un JWT) Saleor no llega a decodificar
+ * ningún JWT: un token revocado o sin permisos solo produce `PermissionDenied`.
+ * Las clases de PyJWT (`jwt.exceptions`, todas `PyJWTError`, que el fork trata como
+ * esperadas) quedan como defensa por si la App llegara a autenticarse con un JWT;
+ * hoy no pueden llegar.
  */
-const CODIGOS_AUTENTICACION = new Set(['PermissionDenied', 'ExpiredSignatureError', 'JWTError', 'InvalidSignature'])
+const CODIGOS_AUTENTICACION = new Set([
+  'PermissionDenied',
+  'ExpiredSignatureError',
+  'InvalidSignatureError',
+  'DecodeError',
+  'InvalidTokenError',
+  'ImmatureSignatureError',
+])
 
 interface ErrorConRespuestaHttp {
   response?: { status?: unknown; errors?: unknown }

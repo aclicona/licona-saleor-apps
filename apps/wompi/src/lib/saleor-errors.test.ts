@@ -64,6 +64,24 @@ describe('clasificarFalloSaleor — decide si el reintento de Wompi puede conver
     expect(clasificarFalloSaleor(errorGraphql('ExpiredSignatureError'))).toBe('AUTENTICACION')
   })
 
+  it.each(['InvalidSignatureError', 'DecodeError', 'InvalidTokenError', 'ImmatureSignatureError'])(
+    'detecta el error de PyJWT %s como fallo de autenticación',
+    (codigo) => {
+      // Son los nombres que el `format_error` del fork pone en
+      // `extensions.exception.code` (B-1336).
+      expect(clasificarFalloSaleor(errorGraphql(codigo))).toBe('AUTENTICACION')
+    },
+  )
+
+  it.each(['JWTError', 'InvalidSignature'])(
+    'no toma %s por autenticación: Saleor nunca devuelve ese nombre',
+    (codigo) => {
+      // `JWTError` es de python-jose (no instalado en el fork) e `InvalidSignature`
+      // es de `cryptography`, que PyJWT captura y relanza como InvalidSignatureError.
+      expect(clasificarFalloSaleor(errorGraphql(codigo))).toBe('TRANSITORIO')
+    },
+  )
+
   it('ante un error desconocido cae del lado seguro: transitorio', () => {
     // Preferimos que Wompi reintente (coste: ruido en el log, y Saleor
     // deduplica igual) antes que dar por entregado un evento que quizá nunca
