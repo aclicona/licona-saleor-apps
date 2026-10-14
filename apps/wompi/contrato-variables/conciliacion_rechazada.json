@@ -1,0 +1,13 @@
+{
+  "mutacion": "transactionEventReport",
+  "caso": "conciliacion_rechazada",
+  "documento": "mutation TransactionEventReport( $transactionId: ID! $type: TransactionEventTypeEnum! $amount: PositiveDecimal! $pspReference: String! $message: String $availableActions: [TransactionActionEnum!] ) { transactionEventReport( id: $transactionId type: $type amount: $amount pspReference: $pspReference message: $message availableActions: $availableActions ) { alreadyProcessed transaction { id } errors { field message code } } }",
+  "variables": {
+    "transactionId": "VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzLTgwYzA3NmExNzUzYg==",
+    "type": "CHARGE_FAILURE",
+    "amount": "120000",
+    "pspReference": "12084641-1791286722-99200",
+    "message": "Wompi: DECLINED",
+    "availableActions": []
+  }
+}

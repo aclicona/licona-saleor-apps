@@ -130,6 +130,13 @@ cualquier evento `REFUND_REQUEST/SUCCESS/FAILURE` (abierto o cerrado, distinto d
 `sin-decidir` (`SIN_ID_AMBIGUO`) sin consultar a Wompi. Si del otro no se ve su `REFUND_REQUEST`, se asume solapado.
 Además, los conocidos se limitan a `REFUND_REQUEST/SUCCESS/FAILURE` (no `REFUND_REVERSE`).
 
+## Contrato de variables hacia Saleor (B-1327)
+
+Las variables de `transactionEventReport` que cada camino de esta App enviaría (webhook entrante, conciliación, cierre de
+solicitudes, aviso INFO) están congeladas en `contrato-variables/*.json` (`src/lib/contrato-variables.test.ts`, regenerar con
+`vitest -u` solo a propósito). El validador del repo raíz `scripts/contrato-variables/validar.py --fork <árbol del fork>` las
+pasa por el schema y las validaciones reales del fork: córrelo en cada salto de Saleor (ver su README).
+
 ## Prueba de contrato contra el sandbox (B-1100)
 
 Los reembolsos sin id (B-1097) dependen de hechos que NO están en la doc pública de Wompi y se midieron en sandbox

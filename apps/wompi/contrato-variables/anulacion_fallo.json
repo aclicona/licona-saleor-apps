@@ -1,0 +1,15 @@
+{
+  "mutacion": "transactionEventReport",
+  "caso": "anulacion_fallo",
+  "documento": "mutation TransactionEventReport( $transactionId: ID! $type: TransactionEventTypeEnum! $amount: PositiveDecimal! $pspReference: String! $message: String $availableActions: [TransactionActionEnum!] ) { transactionEventReport( id: $transactionId type: $type amount: $amount pspReference: $pspReference message: $message availableActions: $availableActions ) { alreadyProcessed transaction { id } errors { field message code } } }",
+  "variables": {
+    "transactionId": "VHJhbnNhY3Rpb25JdGVtOmEyMGVkNTc2LTNkOGMtNDliMi1iZGUzLTgwYzA3NmExNzUzYg==",
+    "type": "CANCEL_FAILURE",
+    "amount": "3000",
+    "pspReference": "12084641-1791286722-99200",
+    "message": "La anulación no se aplicó en Wompi (sigue APPROVED pasado el margen)",
+    "availableActions": [
+      "REFUND"
+    ]
+  }
+}
