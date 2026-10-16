@@ -76,7 +76,9 @@ resuelven `@licona/webhook-utils` desde `packages/webhook-utils/src` (alias), no
 los tests nunca dependen de un build previo ni del dist de otro checkout. Basta `pnpm install
 --frozen-lockfile` y `pnpm --filter @licona/app-wompi test`. Los tipos sí salen del `dist` de
 `webhook-utils`, por eso (B-1118) `pnpm --filter @licona/app-wompi typecheck` (y `@licona/app-envios`) y el
-`pnpm typecheck` raíz compilan antes `webhook-utils`: un `dist` rancio ya no da TS2305/TS2339 falsos.
+`pnpm typecheck` raíz compilan antes `webhook-utils`: un `dist` rancio ya no da TS2305/TS2339 falsos. Lo vigila
+`packages/webhook-utils/src/candado-typecheck.test.ts` (B-1364): falla si el `typecheck` de una App, de un paquete o
+de la raíz deja de construir antes de `tsc` sus dependencias `workspace:` (p. ej. al añadir un paquete nuevo en `packages/*`).
 **Logging en `apps/envios`:** el handler de envíos usa el mismo patrón que los de wompi: `req.log.child`
 con `webhook` y las claves canónicas de correlación (`checkoutId`, en `lib/correlacion.ts`), y los
 fallos de firma se escriben como `log.warn({ motivo: err.reason }, err.message)` — no con `msg` dentro
