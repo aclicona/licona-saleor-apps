@@ -35,6 +35,10 @@ jobs:
       # que las Apps puedan resolverlo (typecheck y tests incluidos).
       - run: pnpm -r build
 
+      # B-1273: eslint (no-floating-promises, etc.) existía en el package.json pero nadie lo
+      # corría. Los errores rompen CI; los warnings (deuda en tests) no.
+      - run: pnpm lint
+
       - run: pnpm typecheck
 
       - run: pnpm test
