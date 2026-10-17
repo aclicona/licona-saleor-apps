@@ -51,18 +51,12 @@ export interface Excepcion {
 const MOTIVO_RAWBODY = 'B-1369: decisión pendiente de Andrés'
 
 /**
- * Excepciones vigentes. Cada una es un `rawBody` deliberado: el código lo deja como
- * "única prueba de qué se recibió" cuando hay dinero en riesgo. Quitarlo lo decide
- * Andrés en otro reporte. La lista no se pudre: una excepción que ya no corresponde
+ * Excepciones vigentes. Vacía desde B-1374: los cinco `rawBody` de wompi-incoming se
+ * sustituyeron por `resumenPago` (sin PII), por decisión de Andrés. La lista no se pudre: una excepción que ya no corresponde
  * a ningún hallazgo real FALLA el test (bórrala cuando el log se corrija).
  * apps/envios lleva la lista vacía.
  */
 export const EXCEPCIONES: readonly Excepcion[] = [
-  { archivo: 'webhooks/wompi-incoming.ts', patron: 'rawBody', fragmentoMensaje: 'sin data.transaction', motivo: MOTIVO_RAWBODY },
-  { archivo: 'webhooks/wompi-incoming.ts', patron: 'rawBody', fragmentoMensaje: 'Importe de Wompi corrupto', motivo: MOTIVO_RAWBODY },
-  { archivo: 'webhooks/wompi-incoming.ts', patron: 'rawBody', fragmentoMensaje: 'Pago APROBADO cuya referencia no es un ID', motivo: MOTIVO_RAWBODY },
-  { archivo: 'webhooks/wompi-incoming.ts', patron: 'rawBody', fragmentoMensaje: 'INCORRECT_DETAILS', motivo: MOTIVO_RAWBODY },
-  { archivo: 'webhooks/wompi-incoming.ts', patron: 'rawBody', fragmentoMensaje: 'NOT_FOUND sobre un pago APROBADO', motivo: MOTIVO_RAWBODY },
 ]
 
 /** Cubre una violación esta excepción. */

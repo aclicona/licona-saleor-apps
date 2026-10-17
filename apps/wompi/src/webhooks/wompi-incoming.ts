@@ -9,6 +9,7 @@ import {
 import { CABECERA_CHECKSUM, verificarFirmaWompi, type EventoFirmado } from '../lib/wompi-signature.js'
 import { camposDeCorrelacionWompi } from '../lib/correlacion.js'
 import { transactionIdDesdeReferencia } from '../lib/referencia.js'
+import { resumenPago } from '../lib/resumen-pago.js'
 
 /**
  * Estados de la transacción en Wompi → tipo de evento de `transactionEventReport`.
@@ -83,7 +84,6 @@ interface WompiEvent extends EventoFirmado {
  * catch y responden 200.
  */
 export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyReply) {
-  const rawBody = (req as FastifyRequest & { rawBody?: string }).rawBody ?? ''
   const secret = process.env.WOMPI_EVENTS_SECRET ?? ''
   const event = req.body as WompiEvent
 
@@ -123,7 +123,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
   if (!txn) {
     // Firma válida pero sin transacción en el cuerpo. Permanente: el payload
     // no va a cambiar por reintentar.
-    log.error({ rawBody }, 'Evento de Wompi con firma válida pero sin data.transaction')
+    log.error({ pago: resumenPago(event) }, 'Evento de Wompi con firma válida pero sin data.transaction')
     return reply.status(200).send({ ok: true })
   }
 
@@ -146,7 +146,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     importeCop = centsToCop(txn.amount_in_cents)
   } catch (error) {
     log.fatal(
-      { referencia: txn.reference, amountInCents: txn.amount_in_cents, rawBody, error },
+      { referencia: txn.reference, amountInCents: txn.amount_in_cents, pago: resumenPago(event), error },
       'Importe de Wompi corrupto: no se reporta a Saleor. Ningún reintento lo arregla — requiere revisión humana',
     )
     return reply.status(200).send({ ok: true })
@@ -175,12 +175,12 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     // La severidad la decide el importe en riesgo, no el código de error. Con
     // APPROVED hay dinero cobrado que Saleor no va a poder atribuir a ninguna
     // transacción: mismo trato que INCORRECT_DETAILS, `fatal` y con el payload
-    // crudo, que es la única prueba de qué se recibió exactamente. Con cualquier
+    // resumido (referencia, estado, importe y fecha; sin PII, B-1374). Con cualquier
     // otro estado esto es ruido esperable de una cuenta compartida, y un `fatal`
     // incondicional convertiría ese ruido en páginas a un humano de madrugada.
     if (txn.status === 'APPROVED') {
       log.fatal(
-        { referencia: txn.reference, tipo: saleorEventType, importeCop, rawBody },
+        { referencia: txn.reference, tipo: saleorEventType, importeCop, pago: resumenPago(event) },
         'Pago APROBADO cuya referencia no es un ID de transacción de Saleor: el cobro existe en Wompi ' +
           'pero no hay transacción a la que acreditarlo, y el evento no se reporta. ' +
           'Ningún reintento lo arregla — es dinero cobrado sin destino, requiere revisión humana inmediata',
@@ -245,7 +245,7 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
           tipo: saleorEventType,
           importeCop,
           errores: resultado.errors,
-          rawBody,
+          pago: resumenPago(event),
         },
         'INCORRECT_DETAILS: Saleor ya registró este pspReference con un importe distinto. ' +
           'Posible inconsistencia de Wompi o manipulación del importe — requiere revisión humana inmediata',
@@ -259,11 +259,11 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
       // decide el importe en riesgo, no el código de error. Un CHARGE_SUCCESS es
       // un pago que Wompi ya confirmó y que no se va a acreditar en ninguna
       // orden — el mismo caso que INCORRECT_DETAILS, dinero perdido, y por eso
-      // lleva el `rawBody` como prueba. Un CHARGE_FAILURE no mueve dinero: es un
+      // lleva el resumen del pago (sin PII, B-1374). Un CHARGE_FAILURE no mueve dinero: es un
       // evento huérfano que hay que mirar, no una emergencia.
       if (saleorEventType === 'CHARGE_SUCCESS') {
         log.fatal(
-          { referencia: txn.reference, tipo: saleorEventType, importeCop, errores: resultado.errors, rawBody },
+          { referencia: txn.reference, tipo: saleorEventType, importeCop, errores: resultado.errors, pago: resumenPago(event) },
           'NOT_FOUND sobre un pago APROBADO: Wompi confirmó el cobro y Saleor no reconoce la transacción, ' +
             'así que el pago no queda acreditado en ninguna orden. Permanente: no se pide reintento — ' +
             'es dinero cobrado y perdido, requiere revisión humana inmediata',

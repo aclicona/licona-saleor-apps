@@ -71,6 +71,14 @@ interface OpcionesPeticion {
   secret?: string
 }
 
+/** B-1374: el contexto lleva el resumen del pago y ni rastro del cuerpo crudo ni de la PII. */
+function expectResumenSinPii(contexto: Record<string, unknown>) {
+  expect(contexto.rawBody).toBeUndefined()
+  expect(contexto.pago).toMatchObject({ estado: expect.any(String), amountInCents: expect.any(Number) })
+  const volcado = JSON.stringify(contexto)
+  expect(volcado).not.toMatch(/customer_email|customer_data|full_name|@/)
+}
+
 /** Doble de FastifyRequest con logger espiable. */
 function crearRequest({ evento, checksum, ubicacion = 'ambos', secret = SECRET }: OpcionesPeticion = {}) {
   const base = evento ?? eventoWompi()
@@ -474,7 +482,7 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
       }),
     )
 
-    const { req, log, rawBody, bindings } = crearRequest()
+    const { req, log, bindings } = crearRequest()
     const { reply, captura } = crearReply()
 
     await wompiIncomingHandler(req, reply)
@@ -484,10 +492,10 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
     expect(captura.status).toBe(200)
     expect(log.fatal).toHaveBeenCalled()
 
-    // El log crítico tiene que llevar el payload crudo: es la única prueba de
-    // qué se recibió exactamente ante una posible manipulación del importe.
+    // El log crítico lleva el resumen del pago (referencia, estado, importe y
+    // fecha), NO el payload crudo: trae PII del cliente (B-1374).
     const [contexto, mensaje] = log.fatal.mock.calls[0] as [Record<string, unknown>, string]
-    expect(contexto.rawBody).toBe(rawBody)
+    expectResumenSinPii(contexto)
     expect(mensaje).toContain('INCORRECT_DETAILS')
     // El pspReference ya no se repite a mano en cada contexto: lo lleva el
     // logger hijo, así que va en TODA línea del handler, no solo en esta.
@@ -505,7 +513,7 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
       }),
     )
 
-    const { req, log, rawBody } = crearRequest()
+    const { req, log } = crearRequest()
     const { reply, captura } = crearReply()
 
     await wompiIncomingHandler(req, reply)
@@ -517,7 +525,7 @@ describe('wompiIncomingHandler — fallos permanentes (200, ningún reintento co
     // El payload crudo es la única prueba de qué se recibió exactamente, y sin
     // él la revisión humana empieza a ciegas.
     const [contexto, mensaje] = log.fatal.mock.calls[0] as [Record<string, unknown>, string]
-    expect(contexto.rawBody).toBe(rawBody)
+    expectResumenSinPii(contexto)
     expect(mensaje).toContain('NOT_FOUND')
   })
 
@@ -601,7 +609,7 @@ describe('wompiIncomingHandler — referencia que no es un ID de transacción de
   it('NO llama a Saleor y responde 200 cuando la referencia es basura y el pago está APROBADO', async () => {
     reportTransactionEventMock.mockResolvedValue(resultadoOk())
 
-    const { req, log, rawBody } = crearRequest({
+    const { req, log } = crearRequest({
       evento: eventoWompi({ reference: 'referencia-de-otra-integracion' }),
     })
     const { reply, captura } = crearReply()
@@ -618,7 +626,7 @@ describe('wompiIncomingHandler — referencia que no es un ID de transacción de
     // fatal y con el payload crudo como prueba.
     expect(log.fatal).toHaveBeenCalled()
     const [contexto] = log.fatal.mock.calls[0] as [Record<string, unknown>, string]
-    expect(contexto.rawBody).toBe(rawBody)
+    expectResumenSinPii(contexto)
     expect(contexto.referencia).toBe('referencia-de-otra-integracion')
   })
 
