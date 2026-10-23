@@ -22,7 +22,7 @@ export function construirManifiesto(APP_URL: string) {
   event {
     ... on PaymentGatewayInitializeSession {
       sourceObject {
-        ... on Checkout { id totalPrice { gross { amount currency } } }
+        ... on Checkout { id }
       }
       data
       amount
@@ -43,8 +43,6 @@ export function construirManifiesto(APP_URL: string) {
         ... on Checkout {
           id
           email
-          billingAddress { firstName lastName streetAddress1 city country { code } postalCode }
-          totalPrice { gross { amount currency } }
         }
       }
       data

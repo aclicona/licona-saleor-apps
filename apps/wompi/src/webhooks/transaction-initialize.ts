@@ -49,7 +49,7 @@ interface TransactionInitializePayload {
     token?: unknown
     installments?: unknown
   }
-  sourceObject?: { email?: string; billingAddress?: { email?: string } }
+  sourceObject?: { email?: string }
 }
 
 export async function transactionInitializeHandler(req: FastifyRequest, reply: FastifyReply) {
@@ -80,7 +80,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   const reference = referenciaParaWompi(transaction.id)
   const method = data?.method ?? 'BANCOLOMBIA_TRANSFER'
   const phoneNumber = data?.phone_number
-  const customerEmail = sourceObject?.email ?? sourceObject?.billingAddress?.email ?? ''
+  const customerEmail = sourceObject?.email ?? ''
   const storefrontUrl = process.env.STOREFRONT_URL ?? 'http://localhost:3000'
 
   if (action.currency !== 'COP') {
