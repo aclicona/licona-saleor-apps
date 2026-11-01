@@ -47,3 +47,8 @@ jobs:
       # Se omite mientras SALEOR_SCHEMA_PATH no exista (el esquema vive en el repo
       # del fork); ver scripts/validar-subscriptions.mjs.
       - run: pnpm check:subscriptions
+
+      # B-1858: detecta Dockerfiles que olvidan el manifiesto de alguna App del
+      # workspace (drift que de otro modo solo aparece al construir en Railway).
+      # No necesita build previo: solo lee pnpm-workspace.yaml y los Dockerfiles.
+      - run: pnpm check:dockerfiles
