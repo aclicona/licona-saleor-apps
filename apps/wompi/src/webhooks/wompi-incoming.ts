@@ -10,6 +10,9 @@ import { CABECERA_CHECKSUM, verificarFirmaWompi, type EventoFirmado } from '../l
 import { camposDeCorrelacionWompi } from '../lib/correlacion.js'
 import { transactionIdDesdeReferencia } from '../lib/referencia.js'
 import { resumenPago } from '../lib/resumen-pago.js'
+import { eventoFresco, motivoDeDiscrepancia } from '../lib/contraste-wompi.js'
+import { wompiClient } from '../lib/wompi-client.js'
+import { WompiHttpError } from '../lib/wompi-error.js'
 
 /**
  * Estados de la transacción en Wompi → tipo de evento de `transactionEventReport`.
@@ -74,6 +77,9 @@ interface WompiEvent extends EventoFirmado {
  * | Importe inconsistente (INCORRECT_DETAILS)| 200 + fatal | código en `errors[]` de la mutación          |
  * | Referencia que no es un ID de Saleor     | 200 + fatal si APPROVED, warn si no | `transactionIdDesdeReferencia` devuelve undefined |
  * | Transacción inexistente en Saleor        | 200 + fatal si CHARGE_SUCCESS, warn si no (B-1113) | código NOT_FOUND en `errors[]` |
+ * | Evento fuera de la ventana de frescura (B-1900) | 401 + warn | `eventoFresco` (timestamp firmado)    |
+ * | Evento que la API de Wompi no respalda (B-1900) | 401 + fatal si APPROVED, warn si no | `GET /transactions/{id}` difiere en id/reference/estado/importe/moneda, o 404 |
+ * | No se pudo consultar a Wompi (B-1900)    | 500         | red/timeout/5xx/429/401/403: nunca se reporta sin contraste; Wompi reintenta |
  * | Importe de Wompi corrupto                | 200 + fatal | `centsToCop` lanza                           |
  * | Estado de Wompi sin mapeo                | 200 + info  | `WOMPI_TO_SALEOR[status]` undefined          |
  *
@@ -125,6 +131,16 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     // no va a cambiar por reintentar.
     log.error({ pago: resumenPago(event) }, 'Evento de Wompi con firma válida pero sin data.transaction')
     return reply.status(200).send({ ok: true })
+  }
+
+  // B-1900: ventana de frescura sobre el timestamp raíz (cubierto por la firma). Un evento firmado capturado no
+  // vale para siempre. 401 como la firma inválida: el evento no es aceptable tal cual.
+  if (!eventoFresco(event.timestamp)) {
+    log.warn(
+      { motivo: 'EVENTO_FUERA_DE_VENTANA', timestamp: event.timestamp, estadoWompi: txn.status },
+      'Evento de Wompi fuera de la ventana de frescura — rechazado sin reportar a Saleor',
+    )
+    return reply.status(401).send({ error: 'Evento fuera de la ventana de frescura' })
   }
 
   const saleorEventType = WOMPI_TO_SALEOR[txn.status]
@@ -194,6 +210,29 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
       )
     }
     return reply.status(200).send({ ok: true })
+  }
+
+  // B-1900: contraste con la fuente de verdad ANTES de reportar. La firma solo cubre lo que el evento enumera;
+  // aquí la transacción real de Wompi debe coincidir en id, reference, estado, importe y moneda. Va después de
+  // validar la referencia para no consultar a Wompi por eventos ajenos que igualmente no se reportan.
+  let real
+  try {
+    real = await wompiClient().getTransaction(txn.id)
+  } catch (error) {
+    if (error instanceof WompiHttpError && error.status === 404) {
+      return rechazarPorContraste(reply, log, 'TRANSACCION_INEXISTENTE', txn.status, importeCop)
+    }
+    // Red, timeout, 5xx, 429 o credenciales propias rotas (401/403): el contraste es imposible AHORA y un
+    // reintento idéntico puede tener éxito. Nunca se reporta sin contraste ni se traga el evento: 500 = Wompi reintenta.
+    log.warn(
+      { tipo: saleorEventType, estadoWompi: txn.status, error },
+      'No se pudo contrastar el evento con la API de Wompi. Se devuelve 500 para que Wompi reintente; no se reporta a Saleor',
+    )
+    return reply.status(500).send({ error: 'No se pudo verificar el evento con Wompi' })
+  }
+  const discrepancia = motivoDeDiscrepancia(txn, real)
+  if (discrepancia) {
+    return rechazarPorContraste(reply, log, discrepancia, txn.status, importeCop)
   }
 
   let resultado
@@ -302,4 +341,26 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
   }
 
   return reply.status(200).send({ ok: true })
+}
+
+/**
+ * Rechazo por contraste (B-1900): 401, el mismo que una firma inválida. Wompi reintentará unas veces y se rendirá;
+ * ningún reintento converge porque el evento no coincide con la transacción real. Sin datos de cliente en el log:
+ * solo el motivo, el estado y el importe. Si el evento decía APPROVED hay un intento de marcar algo como pagado
+ * sin respaldo en Wompi: `fatal`, mismo criterio de severidad por importe en riesgo del resto del handler.
+ */
+function rechazarPorContraste(
+  reply: FastifyReply,
+  log: FastifyRequest['log'],
+  motivo: string,
+  estadoWompi: string,
+  importeCop: number,
+) {
+  const nivel = estadoWompi === 'APPROVED' ? 'fatal' : 'warn'
+  log[nivel](
+    { motivo, estadoWompi, importeCop },
+    'El evento de Wompi no coincide con la transacción real de la API de Wompi — rechazado sin reportar a Saleor' +
+      (nivel === 'fatal' ? '. Posible evento manipulado o reenviado: requiere revisión humana' : ''),
+  )
+  return reply.status(401).send({ error: 'Evento no verificado contra Wompi' })
 }

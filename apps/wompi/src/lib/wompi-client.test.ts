@@ -274,6 +274,15 @@ describe('WompiClient — señal de plazo externa (B-1078)', () => {
     expect(error).toBeInstanceOf(WompiHttpError)
     expect(error.status).toBe(422)
   })
+
+  it('getTransaction no-ok lanza WompiHttpError con el status y codifica el id en la URL (B-1900)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404 })
+    vi.stubGlobal('fetch', fetchMock)
+    const error = await crearClientePrueba().getTransaction('a/../b').catch((e) => e)
+    expect(error).toBeInstanceOf(WompiHttpError)
+    expect(error.status).toBe(404)
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/transactions\/a%2F\.\.%2Fb$/)
+  })
 })
 
 describe('WompiClient.findTransactionsByReference — búsqueda por reference (B-1095)', () => {

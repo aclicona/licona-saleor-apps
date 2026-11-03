@@ -10,10 +10,24 @@ vi.mock('../lib/saleor-client.js', () => ({
   reportTransactionEvent: vi.fn(),
 }))
 
+// B-1900: el handler contrasta el evento con `GET /transactions/{id}` de Wompi antes de reportar.
+vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
+
 import { reportTransactionEvent } from '../lib/saleor-client.js'
+import { wompiClient } from '../lib/wompi-client.js'
+import { WompiHttpError } from '../lib/wompi-error.js'
+import { VENTANA_FRESCURA_EVENTO_MS } from '../lib/contraste-wompi.js'
 import { wompiIncomingHandler } from './wompi-incoming.js'
 
 const reportTransactionEventMock = vi.mocked(reportTransactionEvent)
+const wompiClientMock = vi.mocked(wompiClient)
+const getTransactionMock = vi.fn()
+
+/** Último evento construido por `crearRequest`: por defecto Wompi "confirma" exactamente lo que dice el evento. */
+let transaccionDelEvento: Record<string, unknown> = {}
+
+/** Segundos UNIX de "ahora": los eventos de prueba son frescos salvo que el test pida lo contrario. */
+const ahoraUnix = () => Math.floor(Date.now() / 1000)
 
 const SECRET = 'secreto-de-eventos-de-prueba'
 
@@ -82,6 +96,7 @@ function expectResumenSinPii(contexto: Record<string, unknown>) {
 /** Doble de FastifyRequest con logger espiable. */
 function crearRequest({ evento, checksum, ubicacion = 'ambos', secret = SECRET }: OpcionesPeticion = {}) {
   const base = evento ?? eventoWompi()
+  transaccionDelEvento = (base.data?.transaction as Record<string, unknown>) ?? {}
   // Un evento SIN bloque signature no se puede firmar: se deja tal cual para
   // poder probar ese caso degenerado a través del handler.
   const valor = checksum ?? (base.signature ? calcularChecksum(base, secret) : '')
@@ -161,7 +176,7 @@ function eventoWompi(
         ...overrides,
       },
     },
-    timestamp: 1_700_000_000,
+    timestamp: ahoraUnix(),
     signature: {
       properties: ['transaction.id', 'transaction.status', 'transaction.amount_in_cents'],
     },
@@ -188,6 +203,8 @@ function errorHttpSaleor(status: number) {
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.WOMPI_EVENTS_SECRET = SECRET
+  getTransactionMock.mockImplementation(async () => ({ currency: 'COP', ...transaccionDelEvento }))
+  wompiClientMock.mockReturnValue({ getTransaction: getTransactionMock } as unknown as ReturnType<typeof wompiClient>)
 })
 
 afterEach(() => {
@@ -319,6 +336,129 @@ describe('wompiIncomingHandler — verificación de firma', () => {
 
     expect(captura.status).toBe(401)
     expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('wompiIncomingHandler — contraste con la API de Wompi y frescura (B-1900)', () => {
+  const HORA = 3_600
+  const txnReal = (o: Record<string, unknown> = {}) => ({
+    id: 'wompi-txn-12345',
+    status: 'APPROVED',
+    reference: REFERENCIA_SALEOR,
+    amount_in_cents: 12_000_000,
+    currency: 'COP',
+    ...o,
+  })
+
+  async function procesar(opts: Parameters<typeof crearRequest>[0] = {}) {
+    const { req, log } = crearRequest(opts)
+    const { reply, captura } = crearReply()
+    await wompiIncomingHandler(req, reply)
+    return { captura, log }
+  }
+
+  it('caso legítimo: consulta la transacción por id y reporta', async () => {
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+    getTransactionMock.mockResolvedValue(txnReal())
+
+    const { captura } = await procesar()
+
+    expect(getTransactionMock).toHaveBeenCalledWith('wompi-txn-12345')
+    expect(captura.status).toBe(200)
+    expect(reportTransactionEventMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('reference manipulada: la transacción real tiene OTRA reference -> 401 y no reporta', async () => {
+    getTransactionMock.mockResolvedValue(txnReal({ reference: 'otra-referencia-real' }))
+
+    const { captura, log } = await procesar()
+
+    expect(captura.status).toBe(401)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+    const contexto = log.error.mock.calls[0]?.[0] ?? log.fatal.mock.calls[0]?.[0] ?? log.warn.mock.calls[0]?.[0]
+    expect(contexto).toMatchObject({ motivo: 'REFERENCE_DISTINTA' })
+    expect(JSON.stringify(contexto)).not.toMatch(/customer_email|full_name|@/)
+  })
+
+  it('importe distinto -> 401 y no reporta', async () => {
+    getTransactionMock.mockResolvedValue(txnReal({ amount_in_cents: 100 }))
+
+    const { captura } = await procesar()
+
+    expect(captura.status).toBe(401)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it('moneda distinta de COP -> 401 y no reporta', async () => {
+    getTransactionMock.mockResolvedValue(txnReal({ currency: 'USD' }))
+
+    const { captura } = await procesar()
+
+    expect(captura.status).toBe(401)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it('estado distinto (evento APPROVED, Wompi dice DECLINED) -> 401 y no reporta', async () => {
+    getTransactionMock.mockResolvedValue(txnReal({ status: 'DECLINED' }))
+
+    const { captura } = await procesar()
+
+    expect(captura.status).toBe(401)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it('id inexistente en Wompi (404) -> 401 y no reporta', async () => {
+    getTransactionMock.mockRejectedValue(new WompiHttpError('Wompi 404', 404))
+
+    const { captura } = await procesar()
+
+    expect(captura.status).toBe(401)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['red', new TypeError('fetch failed')],
+    ['timeout', new DOMException('timeout', 'TimeoutError')],
+    ['5xx', new WompiHttpError('Wompi 503', 503)],
+    ['429', new WompiHttpError('Wompi 429', 429)],
+    ['credenciales de la App (401)', new WompiHttpError('Wompi 401', 401)],
+  ])('fallo al contrastar (%s) -> 500 para que Wompi reintente, sin reportar', async (_n, error) => {
+    getTransactionMock.mockRejectedValue(error)
+
+    const { captura } = await procesar()
+
+    expect(captura.status).toBe(500)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it('evento más viejo que la ventana de frescura -> 401, sin consultar a Wompi ni reportar', async () => {
+    const viejo = ahoraUnix() - Math.floor(VENTANA_FRESCURA_EVENTO_MS / 1000) - HORA
+    const { captura } = await procesar({ evento: { ...eventoWompi(), timestamp: viejo } })
+
+    expect(captura.status).toBe(401)
+    expect(getTransactionMock).not.toHaveBeenCalled()
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it('evento con timestamp muy en el futuro -> 401', async () => {
+    const { captura } = await procesar({ evento: { ...eventoWompi(), timestamp: ahoraUnix() + HORA } })
+
+    expect(captura.status).toBe(401)
+    expect(reportTransactionEventMock).not.toHaveBeenCalled()
+  })
+
+  it('reintento dentro de la ventana (23 h) sigue aceptándose', async () => {
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+    const { captura } = await procesar({ evento: { ...eventoWompi(), timestamp: ahoraUnix() - 23 * HORA } })
+
+    expect(captura.status).toBe(200)
+    expect(reportTransactionEventMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('la referencia ajena (no ID de Saleor) sigue sin consultar a Wompi', async () => {
+    await procesar({ evento: eventoWompi({ reference: 'no-es-un-id-de-saleor' }) })
+
+    expect(getTransactionMock).not.toHaveBeenCalled()
   })
 })
 

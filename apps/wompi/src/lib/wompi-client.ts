@@ -140,11 +140,12 @@ export class WompiClient {
 
   async getTransaction(id: string, plazo?: AbortSignal): Promise<WompiTransaction> {
     const res = await this.fetchWompi(
-      `${this.baseUrl}/transactions/${id}`,
+      `${this.baseUrl}/transactions/${encodeURIComponent(id)}`,
       { headers: { Authorization: `Bearer ${this.config.privateKey}` } },
       plazo,
     )
-    if (!res.ok) throw new Error(`Wompi ${res.status}`)
+    // WompiHttpError (subclase de Error, mismo mensaje) lleva el status: el webhook entrante distingue 404 de 5xx (B-1900).
+    if (!res.ok) throw new WompiHttpError(`Wompi ${res.status}`, res.status)
     return ((await res.json()) as { data: WompiTransaction }).data
   }
 

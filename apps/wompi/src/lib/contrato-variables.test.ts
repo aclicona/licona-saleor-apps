@@ -32,6 +32,13 @@ vi.mock('./wompi-signature.js', async (importOriginal) => ({
   verificarFirmaWompi: () => ({ valido: true }),
 }))
 
+// B-1900: el webhook entrante contrasta con `GET /transactions/{id}`; aquí Wompi "confirma" lo que dice el evento.
+const wompiConfirma = vi.hoisted(() => ({ transaccion: {} as Record<string, unknown> }))
+vi.mock('./wompi-client.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./wompi-client.js')>()),
+  wompiClient: () => ({ getTransaction: () => Promise.resolve({ currency: 'COP', ...wompiConfirma.transaccion }) }),
+}))
+
 import { wompiIncomingHandler } from '../webhooks/wompi-incoming.js'
 import { avisarRevisionHumana } from './aviso-revision-humana.js'
 import { conciliarSolicitudesPendientes, politicaAnulaciones, politicaReembolsos } from './conciliacion-solicitudes.js'
@@ -69,6 +76,7 @@ beforeEach(() => {
 /** Webhook entrante de Wompi → `reportTransactionEvent` real. */
 async function porWebhookEntrante(status: string): Promise<void> {
   const body = { event: 'transaction.updated', data: { transaction: { id: PSP_WOMPI, status, reference: REFERENCIA_SALEOR, amount_in_cents: CENTAVOS } } }
+  wompiConfirma.transaccion = body.data.transaction
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(), child: vi.fn() }
   log.child.mockReturnValue(log)
   const reply = { status: () => reply, send: () => reply }

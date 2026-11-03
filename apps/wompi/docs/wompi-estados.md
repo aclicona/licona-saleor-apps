@@ -170,3 +170,18 @@ excluyendo por `created_at` exacto los reembolsos ya conocidos. Wompi NO tiene e
 Un único candidato se decide con la misma tabla que el caso con id (mensaje con «casado por importe y fecha, sin id»);
 0 candidatos vencidos, varios candidatos, dos requests sin-id del mismo importe o un conocido no consultable quedan en
 `log.error` para revisión humana, nunca como fallo. Reglas completas (ruling de Fable) en `conciliacion.md`.
+## Webhook entrante: contraste con la API de Wompi y frescura (B-1900)
+
+La firma del evento solo cubre lo que él mismo enumera en `signature.properties`. Por eso, antes de reportar a
+Saleor, `wompi-incoming.ts` hace `GET /transactions/{id}` (llave privada) y exige que la transacción real
+coincida con el evento en **id, reference, estado, importe y moneda COP** (`lib/contraste-wompi.ts`).
+
+| Situación | Respuesta |
+|---|---|
+| Evento con `timestamp` fuera de la ventana (72 h hacia atrás, 10 min hacia delante) | 401 + `warn`, sin consultar a Wompi |
+| La transacción real no coincide (o Wompi responde 404) | 401 + `fatal` si el evento era APPROVED, `warn` si no; sin datos de cliente |
+| No se puede consultar a Wompi (red, timeout, 5xx, 429, 401/403 de la llave propia) | 500: Wompi reintenta; nunca se reporta sin contraste |
+
+La ventana (`VENTANA_FRESCURA_EVENTO_MS`) es holgada sobre los reintentos de Wompi (~24 h); un evento legítimo más
+viejo lo recupera la conciliación periódica. Un evento APPROVED cuyo estado real ya cambió (p. ej. a VOIDED) se
+rechaza: el evento VOIDED posterior es el que informa a Saleor.
