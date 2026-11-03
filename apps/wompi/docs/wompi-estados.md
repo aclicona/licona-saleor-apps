@@ -34,6 +34,14 @@ Lo fija el test «secuencia APPROVED → VOIDED» en `src/webhooks/wompi-incomin
 > Pendiente de verificación humana: que Saleor (fork) revierta efectivamente el cobro con esa secuencia
 > requiere un Saleor vivo; aquí solo se prueba el contrato del reporte (tipo + pspReference).
 
+**Corolario (B-1916).** Un fallo tardío (`DECLINED`/`ERROR`) de OTRO `txn.id` de Wompi sobre la misma
+`reference` se registra como un fallo aparte y **no revierte nada**: Saleor recalcula la transacción
+agrupando los eventos por `psp_reference` (`transaction_item_calculations.py`), y ese fallo lleva su propio
+`pspReference`, distinto del `CHARGE_SUCCESS` del intento aprobado. El historial del dashboard puede mostrar
+ese fallo; es solo ruido. No se filtra a propósito: las alternativas (decidir fail-open o fail-closed según
+las demás transacciones de la reference) no son deterministas y arriesgan dinero. Lo fija el test «fallo
+tardío de otro intento con la misma reference» en `src/webhooks/wompi-incoming.test.ts`.
+
 ## Contrato transversal: «estado desconocido ≠ rechazo» (B-1061)
 
 Ningún handler síncrono `transaction-*` puede convertir un fallo de transporte hacia Wompi (`AbortError`,

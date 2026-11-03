@@ -532,6 +532,37 @@ describe('wompiIncomingHandler — secuencia APPROVED → VOIDED (B-411)', () =>
   })
 })
 
+describe('wompiIncomingHandler — fallo tardío de otro intento con la misma reference (B-1916)', () => {
+  // Candado de contrato, no de defecto: Saleor recalcula la transacción agrupando los eventos por
+  // `psp_reference` (transaction_item_calculations.py del fork), así que un CHARGE_FAILURE con OTRO
+  // pspReference no revierte el CHARGE_SUCCESS del intento aprobado. Por eso el handler NO consulta
+  // otras transacciones de la reference ni filtra el fallo tardío: lo reporta tal cual con su propio id.
+  it('reporta el DECLINED tardío de OTRO txn.id con su propio pspReference y no toca el del APPROVED', async () => {
+    reportTransactionEventMock.mockResolvedValue(resultadoOk())
+
+    const eventos = [
+      eventoWompi({ id: 'wompi-txn-B', status: 'APPROVED' }),
+      eventoWompi({ id: 'wompi-txn-A', status: 'DECLINED' }),
+    ]
+    for (const evento of eventos) {
+      // `crearRequest` deja `getTransaction` coherente con el evento (contraste de B-1900).
+      const { req } = crearRequest({ evento })
+      const { reply, captura } = crearReply()
+      await wompiIncomingHandler(req, reply)
+      expect(captura.status).toBe(200)
+    }
+
+    expect(reportTransactionEventMock).toHaveBeenCalledTimes(2)
+    const [aprobado, fallido] = reportTransactionEventMock.mock.calls.map(([arg]) => arg)
+    expect(aprobado).toMatchObject({ type: 'CHARGE_SUCCESS', pspReference: 'wompi-txn-B' })
+    expect(fallido).toMatchObject({ type: 'CHARGE_FAILURE', pspReference: 'wompi-txn-A' })
+    expect(fallido.transactionId).toBe(aprobado.transactionId)
+    expect(fallido.pspReference).not.toBe(aprobado.pspReference)
+    // Solo se contrasta cada txn.id con Wompi; no hay búsqueda de otras transacciones por reference.
+    expect(getTransactionMock.mock.calls.map(([id]) => id)).toEqual(['wompi-txn-B', 'wompi-txn-A'])
+  })
+})
+
 describe('wompiIncomingHandler — fallos transitorios (500, Wompi debe reintentar)', () => {
   it('responde 500 cuando la llamada a Saleor da timeout', async () => {
     reportTransactionEventMock.mockRejectedValue(
