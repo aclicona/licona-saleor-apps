@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { crearSeguimientoDeriva, verificarCadena, type SeguimientoDeriva } from '@licona/webhook-utils'
+import { crearSeguimientoDeriva, resumirDeriva, verificarCadena, type SeguimientoDeriva } from '@licona/webhook-utils'
 
 /**
  * `POST /api/register` — Saleor entrega aquí el token tras instalar la App.
@@ -43,6 +43,36 @@ export async function manejadorRegistro(req: FastifyRequest, reply: FastifyReply
 
 /** Estado de deriva del manifiesto (B-406); lo escribe el arranque, lo lee `/api/health/ready`. */
 export const seguimientoDeriva = crearSeguimientoDeriva()
+
+/**
+ * Healthcheck de VIDA (`GET /api/health`, B-2360). Sin red: solo lee el entorno
+ * y el estado de deriva. Mismo contrato que el de app-wompi.
+ *
+ * Devuelve **200 siempre**, también sin `SALEOR_APP_TOKEN` o con deriva
+ * (`status:'degraded'`): el token solo existe DESPUÉS de instalar la App, y la
+ * instalación exige que la App ya esté viva. Si el healthcheck de deploy fuera
+ * `/api/health/ready` (503 sin token), una tienda nueva nunca arrancaría la App
+ * y el token no llegaría jamás. Quien quiera alertar mira `registered`/`status`.
+ * `desconocido` (consulta a Saleor fallida) NO degrada: no sabemos que haya deriva.
+ */
+export function crearManejadorSalud(seguimiento: SeguimientoDeriva = seguimientoDeriva) {
+  return async function manejadorSalud() {
+    const registered = Boolean(process.env.SALEOR_APP_TOKEN?.trim())
+    const d = seguimiento.obtener()
+    const conDeriva = d.estado === 'deriva'
+    return {
+      status: registered && !conDeriva ? 'ok' : 'degraded',
+      registered,
+      deriva: {
+        estado: d.estado,
+        ...(conDeriva ? { detalle: resumirDeriva(d.deriva ?? []) } : {}),
+        ...(d.estado === 'desconocido' ? { detalle: `no se pudo consultar a Saleor: ${d.motivo ?? 'sin detalle'}` } : {}),
+      },
+    }
+  }
+}
+
+export const manejadorSalud = crearManejadorSalud()
 
 /**
  * Healthcheck de cadena (`GET /api/health/ready`): config presente, Saleor

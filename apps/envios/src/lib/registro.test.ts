@@ -1,6 +1,8 @@
 import Fastify from 'fastify'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { manejadorRegistro } from './registro.js'
 import { opcionesLogger } from './logging.js'
 
@@ -167,5 +169,76 @@ describe('deriva del manifiesto en /api/health/ready (B-406)', () => {
     expect(rojo.json().checks.deriva.detalle).toContain('w (AUSENTE_EN_SALEOR)')
     expect((await pedir({ estado: 'desconocido', motivo: 'x' })).statusCode).toBe(200)
     expect((await pedir({ estado: 'sano' })).statusCode).toBe(200)
+  })
+})
+
+describe('healthcheck de vida (/api/health) — B-2360', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  async function pedir(estado?: import('@licona/webhook-utils').EstadoDeriva) {
+    const { crearManejadorSalud } = await import('./registro.js')
+    const { crearSeguimientoDeriva } = await import('@licona/webhook-utils')
+    const seg = crearSeguimientoDeriva()
+    if (estado) seg.registrar(estado)
+    const app = Fastify()
+    app.get('/api/health', crearManejadorSalud(seg))
+    return app.inject({ method: 'GET', url: '/api/health' })
+  }
+
+  it('sin SALEOR_APP_TOKEN → 200 degraded, registered:false (la App debe poder arrancar para ser instalada)', async () => {
+    vi.stubEnv('SALEOR_APP_TOKEN', '')
+    const res = await pedir()
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ status: 'degraded', registered: false })
+  })
+
+  it('token en blanco → igual que sin token', async () => {
+    vi.stubEnv('SALEOR_APP_TOKEN', '   ')
+    const res = await pedir()
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ status: 'degraded', registered: false })
+  })
+
+  it('con token → 200 ok, registered:true', async () => {
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    const res = await pedir({ estado: 'sano' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ status: 'ok', registered: true, deriva: { estado: 'sano' } })
+  })
+
+  it('con deriva → 200 degraded con detalle', async () => {
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    const res = await pedir({ estado: 'deriva', deriva: [{ webhook: 'w', tipo: 'AUSENTE_EN_SALEOR', detalle: 'd' }] })
+    expect(res.statusCode).toBe(200)
+    const cuerpo = res.json()
+    expect(cuerpo.status).toBe('degraded')
+    expect(cuerpo.deriva.detalle).toContain('w (AUSENTE_EN_SALEOR)')
+  })
+
+  it('desconocido → 200 ok con detalle (no sabemos que haya deriva)', async () => {
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    const res = await pedir({ estado: 'desconocido', motivo: 'x' })
+    expect(res.statusCode).toBe(200)
+    const cuerpo = res.json()
+    expect(cuerpo.status).toBe('ok')
+    expect(cuerpo.deriva.detalle).toContain('x')
+  })
+
+  it('no hace ninguna llamada de red', async () => {
+    const espia = vi.fn()
+    vi.stubGlobal('fetch', espia)
+    vi.stubEnv('SALEOR_API_URL', 'https://saleor.example.com/graphql/')
+    vi.stubEnv('SALEOR_APP_TOKEN', 't')
+    await pedir()
+    expect(espia).not.toHaveBeenCalled()
+  })
+
+  it('index.ts registra GET /api/health con el manejador de vida', () => {
+    // index.ts llama a listen() al importarse: se comprueba el registro en el fuente.
+    const fuente = readFileSync(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8')
+    expect(fuente).toMatch(/^app\.get\(\s*'\/api\/health'\s*,\s*manejadorSalud\s*\)/m)
   })
 })

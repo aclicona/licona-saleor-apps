@@ -97,11 +97,11 @@ publicar el del fork y fijar la variable. `eslint.config.mjs` declara los global
 registrados (`app { webhooks { … } }`) y escribe un log `error` con la deriva si difieren
 (`avisarDerivaAlArranque`, `packages/webhook-utils/src/deriva.ts`). Solo detecta: no repara ni bloquea el
 arranque. El resultado (`sano`/`deriva`/`desconocido`/`sin_comprobar`, `crearSeguimientoDeriva`) se refleja en los healthchecks:
-`/api/health` (wompi) pasa a `status:'degraded'` con `deriva.detalle` legible pero **sigue en 200** (reiniciar no arregla la
+`/api/health` (wompi y envios) pasa a `status:'degraded'` con `deriva.detalle` legible pero **sigue en 200** (reiniciar no arregla la
 deriva, hay que reinstalar); `/api/health/ready` (wompi y envios) responde **503** con `checks.deriva`. Una falla de consulta
 a Saleor es `desconocido`: no es rojo, solo se loguea (`warn`). La comprobación del arranque nunca rechaza
 (`comprobarDerivaDesdeManifiesto`). Supuesto del productor: la query `app { webhooks { … } }` no se validó contra el fork. La consulta a Saleor está probada con dobles, no contra el fork.
-**Healthchecks (B-407):** cada App expone dos, con propósito distinto. `GET /api/health` (solo wompi)
+**Healthchecks (B-407):** cada App expone dos, con propósito distinto. `GET /api/health` (wompi y envios; envios desde B-2360, para que una tienda nueva pueda arrancar la App sin token)
 es de *vida*: barato, sin red, 200 incluso en modo degradado — es el que puede usar el orquestador.
 `GET /api/health/ready` (wompi y envios) es de *cadena*: config presente, Saleor alcanzable (POST
 `{ __typename }`) y JWKS descargable con claves; **503** con el detalle por eslabón si falla uno.

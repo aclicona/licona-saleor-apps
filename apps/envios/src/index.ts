@@ -2,7 +2,7 @@ import Fastify, { type FastifyRequest } from 'fastify'
 import { construirManifiesto } from './manifest.js'
 import { comprobarDerivaDesdeManifiesto } from '@licona/webhook-utils'
 import { shippingListMethodsHandler } from './webhooks/shipping-list-methods.js'
-import { manejadorListo, manejadorRegistro, seguimientoDeriva } from './lib/registro.js'
+import { manejadorListo, manejadorRegistro, manejadorSalud, seguimientoDeriva } from './lib/registro.js'
 import { avisoNivelLogInvalido, opcionesServidor } from './lib/logging.js'
 
 // El logger ya no se activa a pelo con `true`: `opcionesServidor()` le pone
@@ -38,6 +38,9 @@ app.get('/api/manifest', async () => construirManifiesto(APP_URL))
 // Saleor hace POST del token aquí tras instalar la App. El handler vive en
 // lib/registro.ts y NO escribe el valor del token en el log.
 app.post('/api/register', manejadorRegistro)
+
+// Healthcheck de vida (sin red, 200 siempre; B-2360): el de deploy.
+app.get('/api/health', manejadorSalud)
 
 // Healthcheck de cadena (config + Saleor + JWKS). 503 si algo falla.
 app.get('/api/health/ready', manejadorListo)
