@@ -95,6 +95,9 @@ function payloadSaleor(transactionId: string, data?: Record<string, unknown>) {
   }
 }
 
+/** Nombre y celular que el storefront manda en PSE (B-2451). */
+const CLIENTE_PSE = { customer_full_name: 'Ana Pérez', customer_phone_number: '3001234567' }
+
 /** La `reference` que de verdad recibió el cliente de Wompi. */
 function referenciaEnviadaAWompi(): unknown {
   expect(createTransaction).toHaveBeenCalledTimes(1)
@@ -144,6 +147,7 @@ describe('transactionInitializeHandler — la referencia que viaja a Wompi', () 
         idempotencyKey: 'clave-del-storefront',
         user_legal_id: '1020304050',
         financial_institution_code: '1007',
+        ...CLIENTE_PSE,
       }),
     )
     const { reply } = crearReply()
@@ -177,11 +181,53 @@ describe('transactionInitializeHandler — la referencia que viaja a Wompi', () 
     // `transactionEventReport`. Comprobar solo la igualdad con `transaction.id`
     // no lo garantiza el día que `referenciaParaWompi` codifique algo.
     const transactionId = idGlobalDeTransaccion()
-    const { req } = crearRequest(payloadSaleor(transactionId, { method: 'PSE', idempotencyKey: 'clave-del-storefront' }))
+    const { req } = crearRequest(payloadSaleor(transactionId, { method: 'PSE', idempotencyKey: 'clave-del-storefront', ...CLIENTE_PSE }))
     const { reply } = crearReply()
 
     await transactionInitializeHandler(req, reply)
 
     expect(transactionIdDesdeReferencia(referenciaEnviadaAWompi())).toBe(transactionId)
+  })
+})
+
+describe('transactionInitializeHandler — customer_data de PSE (B-2451)', () => {
+  const dataPse = { method: 'PSE', user_legal_id: '1020304050', financial_institution_code: '1007' }
+
+  it('PSE manda customer_data a Wompi con el celular en formato 57 + 10 dígitos', async () => {
+    const { req } = crearRequest(payloadSaleor(idGlobalDeTransaccion(), { ...dataPse, ...CLIENTE_PSE }))
+    const { reply } = crearReply()
+
+    await transactionInitializeHandler(req, reply)
+
+    expect(createTransaction.mock.calls[0][0].customerData).toEqual({ phone_number: '573001234567', full_name: 'Ana Pérez' })
+  })
+
+  it.each([
+    ['sin nombre ni celular', {}],
+    ['sin nombre', { customer_phone_number: '3001234567' }],
+    ['celular inválido', { customer_full_name: 'Ana Pérez', customer_phone_number: '2001234567' }],
+  ])('PSE %s -> CHARGE_FAILURE sin llamar a Wompi ni loguear datos personales', async (_t, extra) => {
+    const { req, log } = crearRequest(payloadSaleor(idGlobalDeTransaccion(), { ...dataPse, ...extra }))
+    const { reply, captura } = crearReply()
+
+    await transactionInitializeHandler(req, reply)
+
+    expect(captura.payload).toMatchObject({ result: 'CHARGE_FAILURE' })
+    expect(getAcceptanceToken).not.toHaveBeenCalled()
+    expect(createTransaction).not.toHaveBeenCalled()
+    expect(JSON.stringify(log.warn.mock.calls)).not.toMatch(/2001234567|3001234567|Ana/)
+  })
+
+  it.each([
+    ['BANCOLOMBIA_TRANSFER', {}],
+    ['NEQUI', { phone_number: '3001234567' }],
+  ])('%s no envía customer_data aunque el storefront lo mande', async (method, extra) => {
+    const { req } = crearRequest(payloadSaleor(idGlobalDeTransaccion(), { method, ...extra, ...CLIENTE_PSE }))
+    const { reply } = crearReply()
+
+    await transactionInitializeHandler(req, reply)
+
+    expect(createTransaction).toHaveBeenCalledTimes(1)
+    expect(createTransaction.mock.calls[0][0].customerData).toBeUndefined()
   })
 })

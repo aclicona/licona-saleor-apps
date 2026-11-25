@@ -18,6 +18,8 @@ export interface CreateTransactionParams {
   reference: string
   redirectUrl: string
   acceptanceToken: string
+  /** Solo PSE (B-2451): Wompi lo exige a nivel de transacción. */
+  customerData?: { phone_number: string; full_name: string }
   paymentMethod?: {
     type: string
     // NEQUI
@@ -129,6 +131,7 @@ export class WompiClient {
           acceptance_token: params.acceptanceToken,
           signature: this.integritySignature(params.reference, params.amountInCents, params.currency),
           payment_method: params.paymentMethod ?? { type: 'CARD' },
+          ...(params.customerData ? { customer_data: params.customerData } : {}),
         }),
       },
       plazo,

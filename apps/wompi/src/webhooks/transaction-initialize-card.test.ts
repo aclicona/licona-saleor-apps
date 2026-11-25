@@ -16,6 +16,9 @@ import { transactionInitializeHandler } from './transaction-initialize.js'
  * BANCOLOMBIA_TRANSFER / DAVIPLATA sigan mandando EXACTAMENTE lo de antes.
  */
 
+/** Nombre y celular que el storefront manda en PSE (B-2451). */
+const CLIENTE_PSE = { customer_full_name: 'Ana Pérez', customer_phone_number: '3001234567' }
+
 const createTransaction = vi.fn<[CreateTransactionParams], Promise<WompiTransaction>>()
 const getTransaction = vi.fn<[string, AbortSignal?], Promise<WompiTransaction>>()
 const getAcceptanceToken = vi.fn<[], Promise<string>>()
@@ -119,20 +122,20 @@ describe('transaction-initialize — CARD', () => {
 
 describe('transaction-initialize — otros métodos sin cambios', () => {
   it('PSE', async () => {
-    await ejecutar({ method: 'PSE', token: TOKEN, installments: 3, user_legal_id: '10', financial_institution_code: '1007' })
+    await ejecutar({ ...CLIENTE_PSE, method: 'PSE', token: TOKEN, installments: 3, user_legal_id: '10', financial_institution_code: '1007' })
     expect(createTransaction.mock.calls[0][0].paymentMethod).toEqual({
       type: 'PSE', user_type: 0, user_legal_id_type: 'CC', user_legal_id: '10',
       financial_institution_code: '1007', payment_description: 'Pago en Licona',
     })
   })
   it('PSE envía user_type entero: COMPANY -> 1, "1" -> 1, PERSON -> 0', async () => {
-    await ejecutar({ method: 'PSE', user_type: 'COMPANY' })
-    await ejecutar({ method: 'PSE', user_type: '1' })
-    await ejecutar({ method: 'PSE', user_type: 'PERSON' })
+    await ejecutar({ ...CLIENTE_PSE, method: 'PSE', user_type: 'COMPANY' })
+    await ejecutar({ ...CLIENTE_PSE, method: 'PSE', user_type: '1' })
+    await ejecutar({ ...CLIENTE_PSE, method: 'PSE', user_type: 'PERSON' })
     expect(createTransaction.mock.calls.map((c) => c[0].paymentMethod?.user_type)).toEqual([1, 1, 0])
   })
   it('PSE con user_type inválido: CHARGE_FAILURE sin llamar a Wompi', async () => {
-    const { respuesta } = await ejecutar({ method: 'PSE', user_type: 'OTRO' })
+    const { respuesta } = await ejecutar({ ...CLIENTE_PSE, method: 'PSE', user_type: 'OTRO' })
     expect(respuesta.result).toBe('CHARGE_FAILURE')
     expect(createTransaction).not.toHaveBeenCalled()
   })
@@ -164,7 +167,7 @@ describe('transaction-initialize — URL del banco (PSE / BANCOLOMBIA_TRANSFER)'
   const conUrl = (url: string) => ({ ...sinUrl, payment_method: { extra: { async_payment_url: url } } }) as unknown as WompiTransaction
 
   it.each(['PSE', 'BANCOLOMBIA_TRANSFER'])('%s: redirectUrl es la URL del banco', async (method) => {
-    const { respuesta } = await ejecutar({ method })
+    const { respuesta } = await ejecutar({ ...CLIENTE_PSE, method })
     expect(respuesta.result).toBe('CHARGE_ACTION_REQUIRED')
     expect(respuesta.data).toEqual({ redirectUrl: 'https://banco.example/pago', wompiTransactionId: 'wompi-1' })
   })
@@ -173,7 +176,7 @@ describe('transaction-initialize — URL del banco (PSE / BANCOLOMBIA_TRANSFER)'
     try {
       getTransaction.mockReset()
       getTransaction.mockResolvedValueOnce(sinUrl).mockResolvedValueOnce(conUrl('https://banco.example/2'))
-      const p = ejecutar({ method: 'PSE' })
+      const p = ejecutar({ ...CLIENTE_PSE, method: 'PSE' })
       await vi.advanceTimersByTimeAsync(1500)
       const { respuesta } = await p
       expect((respuesta.data as { redirectUrl: string }).redirectUrl).toBe('https://banco.example/2')
@@ -199,12 +202,12 @@ describe('transaction-initialize — URL del banco (PSE / BANCOLOMBIA_TRANSFER)'
   })
   it('URL no https: fallback a la URL de orden', async () => {
     getTransaction.mockResolvedValue(conUrl('http://banco.example/inseguro'))
-    const { respuesta } = await ejecutar({ method: 'PSE' })
+    const { respuesta } = await ejecutar({ ...CLIENTE_PSE, method: 'PSE' })
     expect((respuesta.data as { redirectUrl: string }).redirectUrl).toBe('https://x')
   })
   it('estado final DECLINED durante el sondeo: CHARGE_FAILURE', async () => {
     getTransaction.mockResolvedValue({ ...sinUrl, status: 'DECLINED' } as WompiTransaction)
-    const { respuesta } = await ejecutar({ method: 'PSE' })
+    const { respuesta } = await ejecutar({ ...CLIENTE_PSE, method: 'PSE' })
     expect(respuesta.result).toBe('CHARGE_FAILURE')
   })
   it('NEQUI y CARD no sondean', async () => {

@@ -326,3 +326,23 @@ describe('WompiClient.findTransactionsByReference — búsqueda por reference (B
     expect(e.cuerpo).toEqual(cuerpo)
   })
 })
+
+describe('WompiClient.createTransaction — customer_data (B-2451)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  async function cuerpoEnviado(extra: object) {
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ data: { id: 'w1' } }) })
+    vi.stubGlobal('fetch', fetchMock)
+    await crearClientePrueba().createTransaction({ ...PARAMS_CREAR, ...extra })
+    return JSON.parse(fetchMock.mock.calls[0][1].body)
+  }
+
+  it('manda customer_data a nivel de transacción cuando viene', async () => {
+    const body = await cuerpoEnviado({ customerData: { phone_number: '573001234567', full_name: 'Ana Pérez' } })
+    expect(body.customer_data).toEqual({ phone_number: '573001234567', full_name: 'Ana Pérez' })
+  })
+
+  it('no manda customer_data cuando no viene', async () => {
+    expect(await cuerpoEnviado({})).not.toHaveProperty('customer_data')
+  })
+})

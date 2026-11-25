@@ -8,6 +8,7 @@ import { referenciaParaWompi } from '../lib/referencia.js'
 import { validarDatosTarjeta } from '../lib/tarjeta.js'
 import { sondearUrlPagoAsincrono } from '../lib/url-pago-asincrono.js'
 import { traducirUserTypePse } from '../lib/pse-user-type.js'
+import { construirCustomerDataPse } from '../lib/pse-customer-data.js'
 import { esRechazoDefinitivo, esReferenciaDuplicada } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
 
@@ -46,6 +47,9 @@ interface TransactionInitializePayload {
     user_legal_id_type?: string
     user_legal_id?: string
     financial_institution_code?: string
+    // PSE: Wompi exige customer_data (B-2451); el storefront lo manda aquí porque la subscription no lo trae.
+    customer_full_name?: unknown
+    customer_phone_number?: unknown
     // CARD (B-707): token producido por el navegador con la llave pública. `unknown`
     // a propósito: se valida en `lib/tarjeta.ts` antes de tocar nada.
     token?: unknown
@@ -109,6 +113,13 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: userTypePse.message })
   }
 
+  // PSE: Wompi exige `customer_data` (nombre y celular). Se valida ANTES de hablar con Wompi; el log no lleva datos personales.
+  const customerPse = method === 'PSE' ? construirCustomerDataPse(data?.customer_full_name, data?.customer_phone_number) : undefined
+  if (customerPse && !customerPse.ok) {
+    log.warn({ metodo: method }, 'customer_data de PSE ausente o inválido: se rechaza sin llamar a Wompi')
+    return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: customerPse.message })
+  }
+
   // Una sola señal (`plazo.signal`) para token + creación. El temporizador nace al leerla (los return
   // tempranos no dejan nada vivo) y se limpia en `finally`.
   // 'token': aún no existe nada en Wompi. 'crear': la transacción pudo crearse aunque la respuesta no llegue.
@@ -163,6 +174,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       redirectUrl: `${storefrontUrl}/checkout/orden/${transaction.id}`,
       acceptanceToken,
       paymentMethod,
+      ...(customerPse?.ok ? { customerData: customerPse.customerData } : {}),
       },
       plazo.signal,
     )
