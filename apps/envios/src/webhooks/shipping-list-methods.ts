@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { verifySaleorWebhook, SaleorWebhookError } from '@licona/webhook-utils'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
+import { conEnvioGratis, envioGratisVigente } from '../lib/envio-gratis.js'
 import { calculateTotalWeightKg, cotizarEnvios, type ShippingLine } from '../lib/tarifas.js'
 
 interface ShippingCheckoutPayload {
@@ -48,5 +49,13 @@ export async function shippingListMethodsHandler(
 
   const weightKg = calculateTotalWeightKg(lines)
 
-  return reply.send(cotizarEnvios(weightKg))
+  const metodos = cotizarEnvios(weightKg)
+
+  // Envío gratis temporal (B-2451): solo se ofrece mientras ENVIO_GRATIS_HASTA esté vigente.
+  const gratis = envioGratisVigente(process.env.ENVIO_GRATIS_HASTA, new Date())
+  if (gratis.motivo) log.warn({ motivo: gratis.motivo }, 'Envío gratis temporal no ofrecido')
+  if (!gratis.vigente) return reply.send(metodos)
+
+  log.info({ hasta: gratis.hasta?.toISOString() }, 'Se ofrece el envío gratis temporal')
+  return reply.send(conEnvioGratis(metodos))
 }

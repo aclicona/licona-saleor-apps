@@ -1,0 +1,38 @@
+{
+  "evento": "SHIPPING_LIST_METHODS_FOR_CHECKOUT",
+  "caso": "con_envio_gratis",
+  "respuesta": [
+    {
+      "id": "envio-gratis-temporal",
+      "name": "Envío gratis (temporal)",
+      "amount": 0,
+      "currency": "COP",
+      "minimumDeliveryDays": 3,
+      "maximumDeliveryDays": 5
+    },
+    {
+      "id": "servientrega-estandar",
+      "name": "Servientrega Estándar (3-5 días)",
+      "amount": 12000,
+      "currency": "COP",
+      "maximumDeliveryDays": 5,
+      "minimumDeliveryDays": 3
+    },
+    {
+      "id": "coordinadora-estandar",
+      "name": "Coordinadora Estándar (3-5 días)",
+      "amount": 12600,
+      "currency": "COP",
+      "maximumDeliveryDays": 5,
+      "minimumDeliveryDays": 3
+    },
+    {
+      "id": "tcc-express",
+      "name": "TCC Express (1-2 días)",
+      "amount": 13000,
+      "currency": "COP",
+      "maximumDeliveryDays": 2,
+      "minimumDeliveryDays": 1
+    }
+  ]
+}
