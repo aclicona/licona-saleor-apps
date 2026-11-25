@@ -116,9 +116,24 @@ describe('transaction-initialize — otros métodos sin cambios', () => {
   it('PSE', async () => {
     await ejecutar({ method: 'PSE', token: TOKEN, installments: 3, user_legal_id: '10', financial_institution_code: '1007' })
     expect(createTransaction.mock.calls[0][0].paymentMethod).toEqual({
-      type: 'PSE', user_type: 'PERSON', user_legal_id_type: 'CC', user_legal_id: '10',
+      type: 'PSE', user_type: 0, user_legal_id_type: 'CC', user_legal_id: '10',
       financial_institution_code: '1007', payment_description: 'Pago en Licona',
     })
+  })
+  it('PSE envía user_type entero: COMPANY -> 1, "1" -> 1, PERSON -> 0', async () => {
+    await ejecutar({ method: 'PSE', user_type: 'COMPANY' })
+    await ejecutar({ method: 'PSE', user_type: '1' })
+    await ejecutar({ method: 'PSE', user_type: 'PERSON' })
+    expect(createTransaction.mock.calls.map((c) => c[0].paymentMethod.user_type)).toEqual([1, 1, 0])
+  })
+  it('PSE con user_type inválido: CHARGE_FAILURE sin llamar a Wompi', async () => {
+    const { respuesta } = await ejecutar({ method: 'PSE', user_type: 'OTRO' })
+    expect(respuesta.result).toBe('CHARGE_FAILURE')
+    expect(createTransaction).not.toHaveBeenCalled()
+  })
+  it('BANCOLOMBIA_TRANSFER sigue enviando "PERSON" aunque llegue otro valor', async () => {
+    await ejecutar({ method: 'BANCOLOMBIA_TRANSFER', user_type: 'COMPANY' })
+    expect(createTransaction.mock.calls[0][0].paymentMethod.user_type).toBe('PERSON')
   })
   it('NEQUI con y sin teléfono', async () => {
     await ejecutar({ method: 'NEQUI', phone_number: '3001234567' })

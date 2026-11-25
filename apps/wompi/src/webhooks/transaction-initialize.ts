@@ -6,6 +6,7 @@ import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { referenciaParaWompi } from '../lib/referencia.js'
 import { validarDatosTarjeta } from '../lib/tarjeta.js'
+import { traducirUserTypePse } from '../lib/pse-user-type.js'
 import { esRechazoDefinitivo, esReferenciaDuplicada } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
 
@@ -38,7 +39,7 @@ interface TransactionInitializePayload {
     // NEQUI
     phone_number?: string
     // PSE + BANCOLOMBIA_TRANSFER
-    user_type?: string
+    user_type?: string | number
     payment_description?: string
     // PSE only
     user_legal_id_type?: string
@@ -100,6 +101,13 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: tarjeta.message })
   }
 
+  // PSE: Wompi exige `user_type` entero (0/1). Se traduce y valida ANTES de hablar con Wompi.
+  const userTypePse = method === 'PSE' ? traducirUserTypePse(data?.user_type) : undefined
+  if (userTypePse && !userTypePse.ok) {
+    log.warn({ metodo: method }, 'user_type de PSE inválido: se rechaza sin llamar a Wompi')
+    return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: userTypePse.message })
+  }
+
   // Una sola señal (`plazo.signal`) para token + creación. El temporizador nace al leerla (los return
   // tempranos no dejan nada vivo) y se limpia en `finally`.
   // 'token': aún no existe nada en Wompi. 'crear': la transacción pudo crearse aunque la respuesta no llegue.
@@ -117,7 +125,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       case 'PSE':
         paymentMethod = {
           type: 'PSE',
-          user_type: data?.user_type ?? 'PERSON',
+          user_type: (userTypePse as { ok: true; userType: 0 | 1 }).userType,
           user_legal_id_type: data?.user_legal_id_type ?? 'CC',
           user_legal_id: data?.user_legal_id ?? '',
           financial_institution_code: data?.financial_institution_code ?? '',
@@ -127,7 +135,7 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
       case 'BANCOLOMBIA_TRANSFER':
         paymentMethod = {
           type: 'BANCOLOMBIA_TRANSFER',
-          user_type: data?.user_type ?? 'PERSON',
+          user_type: 'PERSON',
           payment_description: data?.payment_description ?? 'Pago en Licona',
         }
         break

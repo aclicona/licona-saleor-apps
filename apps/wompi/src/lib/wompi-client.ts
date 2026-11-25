@@ -22,8 +22,8 @@ export interface CreateTransactionParams {
     type: string
     // NEQUI
     phone_number?: string
-    // PSE + BANCOLOMBIA_TRANSFER
-    user_type?: string
+    // PSE: entero 0 (natural) / 1 (jurídica). BANCOLOMBIA_TRANSFER: string "PERSON".
+    user_type?: string | number
     payment_description?: string
     // PSE only
     user_legal_id_type?: string
