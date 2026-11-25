@@ -17,6 +17,7 @@ import { transactionInitializeHandler } from './transaction-initialize.js'
  */
 
 const createTransaction = vi.fn<[CreateTransactionParams], Promise<WompiTransaction>>()
+const getTransaction = vi.fn<[string, AbortSignal?], Promise<WompiTransaction>>()
 const getAcceptanceToken = vi.fn<[], Promise<string>>()
 const TOKEN = 'tok_test_12345_SECRETOCOMPLETO'
 
@@ -56,7 +57,11 @@ beforeEach(() => {
     id: 'wompi-1', status: 'PENDING', reference: 'r', amount_in_cents: 12_000_000, currency: 'COP',
     payment_method_type: 'CARD', redirect_url: 'https://x',
   })
-  vi.mocked(wompiClient).mockReturnValue({ getAcceptanceToken, createTransaction } as unknown as ReturnType<typeof wompiClient>)
+  getTransaction.mockResolvedValue({
+    id: 'wompi-1', status: 'PENDING', reference: 'r', amount_in_cents: 12_000_000, currency: 'COP',
+    payment_method_type: 'PSE', payment_method: { extra: { async_payment_url: 'https://banco.example/pago' } },
+  } as unknown as WompiTransaction)
+  vi.mocked(wompiClient).mockReturnValue({ getAcceptanceToken, createTransaction, getTransaction } as unknown as ReturnType<typeof wompiClient>)
 })
 
 describe('transaction-initialize — CARD', () => {
@@ -124,7 +129,7 @@ describe('transaction-initialize — otros métodos sin cambios', () => {
     await ejecutar({ method: 'PSE', user_type: 'COMPANY' })
     await ejecutar({ method: 'PSE', user_type: '1' })
     await ejecutar({ method: 'PSE', user_type: 'PERSON' })
-    expect(createTransaction.mock.calls.map((c) => c[0].paymentMethod.user_type)).toEqual([1, 1, 0])
+    expect(createTransaction.mock.calls.map((c) => c[0].paymentMethod?.user_type)).toEqual([1, 1, 0])
   })
   it('PSE con user_type inválido: CHARGE_FAILURE sin llamar a Wompi', async () => {
     const { respuesta } = await ejecutar({ method: 'PSE', user_type: 'OTRO' })
@@ -133,7 +138,7 @@ describe('transaction-initialize — otros métodos sin cambios', () => {
   })
   it('BANCOLOMBIA_TRANSFER sigue enviando "PERSON" aunque llegue otro valor', async () => {
     await ejecutar({ method: 'BANCOLOMBIA_TRANSFER', user_type: 'COMPANY' })
-    expect(createTransaction.mock.calls[0][0].paymentMethod.user_type).toBe('PERSON')
+    expect(createTransaction.mock.calls[0][0].paymentMethod?.user_type).toBe('PERSON')
   })
   it('NEQUI con y sin teléfono', async () => {
     await ejecutar({ method: 'NEQUI', phone_number: '3001234567' })
@@ -151,5 +156,60 @@ describe('transaction-initialize — otros métodos sin cambios', () => {
   it('DAVIPLATA sigue por default { type }', async () => {
     await ejecutar({ method: 'DAVIPLATA', token: TOKEN })
     expect(createTransaction.mock.calls[0][0].paymentMethod).toEqual({ type: 'DAVIPLATA' })
+  })
+})
+
+describe('transaction-initialize — URL del banco (PSE / BANCOLOMBIA_TRANSFER)', () => {
+  const sinUrl = { id: 'wompi-1', status: 'PENDING', payment_method: { extra: {} } } as unknown as WompiTransaction
+  const conUrl = (url: string) => ({ ...sinUrl, payment_method: { extra: { async_payment_url: url } } }) as unknown as WompiTransaction
+
+  it.each(['PSE', 'BANCOLOMBIA_TRANSFER'])('%s: redirectUrl es la URL del banco', async (method) => {
+    const { respuesta } = await ejecutar({ method })
+    expect(respuesta.result).toBe('CHARGE_ACTION_REQUIRED')
+    expect(respuesta.data).toEqual({ redirectUrl: 'https://banco.example/pago', wompiTransactionId: 'wompi-1' })
+  })
+  it('obtiene la URL al segundo sondeo', async () => {
+    vi.useFakeTimers()
+    try {
+      getTransaction.mockReset()
+      getTransaction.mockResolvedValueOnce(sinUrl).mockResolvedValueOnce(conUrl('https://banco.example/2'))
+      const p = ejecutar({ method: 'PSE' })
+      await vi.advanceTimersByTimeAsync(1500)
+      const { respuesta } = await p
+      expect((respuesta.data as { redirectUrl: string }).redirectUrl).toBe('https://banco.example/2')
+      expect(getTransaction).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('timeout del sondeo: cae a la URL de orden con warn, sin CHARGE_FAILURE', async () => {
+    vi.useFakeTimers()
+    try {
+      getTransaction.mockReset()
+      getTransaction.mockResolvedValue(sinUrl)
+      const p = ejecutar({ method: 'BANCOLOMBIA_TRANSFER' })
+      await vi.advanceTimersByTimeAsync(12_000)
+      const { respuesta, log } = await p
+      expect(respuesta.result).toBe('CHARGE_ACTION_REQUIRED')
+      expect((respuesta.data as { redirectUrl: string }).redirectUrl).toBe('https://x')
+      expect(log.warn).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('URL no https: fallback a la URL de orden', async () => {
+    getTransaction.mockResolvedValue(conUrl('http://banco.example/inseguro'))
+    const { respuesta } = await ejecutar({ method: 'PSE' })
+    expect((respuesta.data as { redirectUrl: string }).redirectUrl).toBe('https://x')
+  })
+  it('estado final DECLINED durante el sondeo: CHARGE_FAILURE', async () => {
+    getTransaction.mockResolvedValue({ ...sinUrl, status: 'DECLINED' } as WompiTransaction)
+    const { respuesta } = await ejecutar({ method: 'PSE' })
+    expect(respuesta.result).toBe('CHARGE_FAILURE')
+  })
+  it('NEQUI y CARD no sondean', async () => {
+    await ejecutar({ method: 'NEQUI' })
+    await ejecutar({ method: 'CARD', token: TOKEN })
+    expect(getTransaction).not.toHaveBeenCalled()
   })
 })

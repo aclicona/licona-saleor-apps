@@ -52,6 +52,8 @@ export interface WompiTransaction {
   currency: string
   payment_method_type: string
   redirect_url?: string
+  /** PSE/BANCOLOMBIA_TRANSFER: `extra.async_payment_url` solo aparece al consultar, segundos después de crear. Dato externo sin validar. */
+  payment_method?: { extra?: { async_payment_url?: unknown } }
   created_at?: string
   /**
    * Solo en `GET /transactions/{id}` (B-1097). Dato externo sin validar: leer SIEMPRE con `refundsEmbebidos`

@@ -6,6 +6,7 @@ import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { referenciaParaWompi } from '../lib/referencia.js'
 import { validarDatosTarjeta } from '../lib/tarjeta.js'
+import { sondearUrlPagoAsincrono } from '../lib/url-pago-asincrono.js'
 import { traducirUserTypePse } from '../lib/pse-user-type.js'
 import { esRechazoDefinitivo, esReferenciaDuplicada } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
@@ -171,12 +172,29 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     // cadena solo se puede reconstruir cuando algo falla.
     log.info({ pspReference: wompiTxn.id, metodo: method }, 'Transacción creada en Wompi')
 
+    // PSE y BANCOLOMBIA_TRANSFER: el comprador debe ir al banco (`async_payment_url`), que Wompi publica segundos
+    // después de crear. Si no llega a tiempo se degrada a nuestra página de orden: la transacción ya existe.
+    let redirectUrl = wompiTxn.redirect_url
+    let result = 'CHARGE_ACTION_REQUIRED'
+    if (method === 'PSE' || method === 'BANCOLOMBIA_TRANSFER') {
+      const client2 = client
+      const sondeo = await sondearUrlPagoAsincrono((id, signal) => client2.getTransaction(id, signal), wompiTxn.id, plazo.signal)
+      if (sondeo.tipo === 'url') {
+        redirectUrl = sondeo.url
+      } else if (sondeo.tipo === 'estadoFinal') {
+        result = RESULTADO_POR_ESTADO[sondeo.transaccion.status] ?? 'CHARGE_ACTION_REQUIRED'
+        log.warn({ pspReference: wompiTxn.id, estadoWompi: sondeo.transaccion.status, result }, 'Wompi dio estado final antes de publicar la URL del banco')
+      } else {
+        log.warn({ pspReference: wompiTxn.id, metodo: method, motivo: sondeo.motivo }, 'Sin URL del banco (async_payment_url): se redirige a la página de orden')
+      }
+    }
+
     return reply.send({
-      result: 'CHARGE_ACTION_REQUIRED',
+      result,
       amount: action.amount,
       pspReference: wompiTxn.id,
-      actions: accionesParaResultado('CHARGE_ACTION_REQUIRED'),
-      data: { redirectUrl: wompiTxn.redirect_url, wompiTransactionId: wompiTxn.id },
+      actions: accionesParaResultado(result),
+      data: { redirectUrl, wompiTransactionId: wompiTxn.id },
     })
   } catch (error) {
     // Antes de crear no hay transacción en Wompi: el fallo es cierto.
