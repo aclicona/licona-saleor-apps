@@ -40,3 +40,23 @@ export function esReferenciaDuplicada(error: unknown): boolean {
   const ref = mensajes?.reference
   return Array.isArray(ref) ? ref.length > 0 : typeof ref === 'string' && ref.length > 0
 }
+
+const MAX_MOTIVO = 200
+
+/**
+ * Texto de validación que Wompi devuelve en un 4xx (`error.messages`: campo -> lista de textos), para
+ * mostrárselo al operador (B-2524). Solo `campo: texto` de cadenas, sin más cuerpo, acotado a 200 caracteres.
+ * Vacío si no es un rechazo definitivo o el cuerpo no trae mensajes: 5xx, timeouts y red siguen genéricos.
+ */
+export function motivoDeRechazo(error: unknown): string {
+  if (!esRechazoDefinitivo(error)) return ''
+  const mensajes = (error.cuerpo as { error?: { messages?: unknown } } | null | undefined)?.error?.messages
+  if (!mensajes || typeof mensajes !== 'object' || Array.isArray(mensajes)) return ''
+  const partes: string[] = []
+  for (const [campo, valor] of Object.entries(mensajes as Record<string, unknown>)) {
+    const textos = (Array.isArray(valor) ? valor : [valor]).filter((t): t is string => typeof t === 'string' && t.length > 0)
+    if (textos.length > 0) partes.push(`${campo}: ${textos.join(' ')}`)
+  }
+  const motivo = partes.join('; ')
+  return motivo.length > MAX_MOTIVO ? `${motivo.slice(0, MAX_MOTIVO - 1)}…` : motivo
+}

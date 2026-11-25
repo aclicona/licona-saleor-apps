@@ -4,7 +4,7 @@ import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/web
 import { wompiClient } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
-import { esRechazoDefinitivo } from '../lib/wompi-error.js'
+import { esRechazoDefinitivo, motivoDeRechazo } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
 import { SEPARADOR_REEMBOLSO_SIN_ID } from '../lib/referencia-reembolso.js'
 
@@ -22,7 +22,7 @@ const esPendiente = (status: string | undefined): boolean => status === 'PENDING
 
 export { PLAZO_GLOBAL_MS }
 
-/** Mensajes fijos hacia Saleor: el texto del error real va solo al log. */
+/** Mensaje genérico hacia Saleor; en un 4xx de validación se le añade el texto de Wompi (B-2524). El resto del error va solo al log. */
 const MENSAJE_RECHAZO = 'Wompi rechazó la solicitud de reembolso'
 
 export async function transactionRefundHandler(req: FastifyRequest, reply: FastifyReply) {
@@ -110,7 +110,12 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // Es la única vía hacia REFUND_FAILURE desde el catch.
     if (!refundId && esRechazoDefinitivo(error)) {
       log.error({ err: error, status: error.status, amount: action.amount }, 'Wompi rechazó crear el reembolso')
-      return reply.send({ result: 'REFUND_FAILURE', amount: action.amount, message: MENSAJE_RECHAZO })
+      const motivo = motivoDeRechazo(error)
+      return reply.send({
+        result: 'REFUND_FAILURE',
+        amount: action.amount,
+        message: motivo ? `${MENSAJE_RECHAZO}: ${motivo}` : MENSAJE_RECHAZO,
+      })
     }
     // B-1071: REFUND_FAILURE es final en Saleor. Un timeout, un fallo de red, un
     // 5xx o un fallo al sondear DESPUÉS de crear dejan el estado DESCONOCIDO (el

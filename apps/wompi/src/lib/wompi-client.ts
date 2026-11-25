@@ -245,7 +245,14 @@ export class WompiClient {
     )
     if (!res.ok) {
       const err = await res.text().catch(() => '')
-      throw new WompiHttpError(`Wompi refund ${res.status}: ${err}`, res.status)
+      // B-2524: cuerpo parseado y estructurado para que el handler pueda mostrar el motivo de un 4xx.
+      let cuerpo: unknown
+      try {
+        cuerpo = JSON.parse(err)
+      } catch {
+        cuerpo = undefined
+      }
+      throw new WompiHttpError(`Wompi refund ${res.status}: ${err}`, res.status, cuerpo)
     }
     return ((await res.json()) as { data: WompiRefund }).data
   }

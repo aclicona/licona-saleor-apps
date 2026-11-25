@@ -169,6 +169,21 @@ describe('WompiClient.refundTransaction / getRefund (B-432)', () => {
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer prv_test_key')
   })
 
+  it('un 422 expone el cuerpo parseado en WompiHttpError.cuerpo (B-2524)', async () => {
+    const cuerpo = { error: { messages: { transaction_id: ['La transacción no está aprobada'] } } }
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 422, text: () => Promise.resolve(JSON.stringify(cuerpo)) })
+    vi.stubGlobal('fetch', fetchMock)
+    const c = new WompiClient({ publicKey: 'p', privateKey: 'k', integrityKey: 'i', sandboxMode: true })
+    await expect(c.refundTransaction('tx-1', 1000)).rejects.toMatchObject({ status: 422, cuerpo })
+  })
+
+  it('un 4xx con cuerpo no JSON deja cuerpo indefinido (B-2524)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('') })
+    vi.stubGlobal('fetch', fetchMock)
+    const c = new WompiClient({ publicKey: 'p', privateKey: 'k', integrityKey: 'i', sandboxMode: true })
+    await expect(c.refundTransaction('tx-1', 1000)).rejects.toMatchObject({ status: 404, cuerpo: undefined })
+  })
+
   it('getRefund hace GET /refunds/{id}', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ data: { id: 1, status: 'APPROVED' } }) })
     vi.stubGlobal('fetch', fetchMock)

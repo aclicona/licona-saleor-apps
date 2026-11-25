@@ -138,6 +138,22 @@ describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => 
     expect(JSON.stringify(payload)).not.toContain('secreto-interno')
     expect(log.error).toHaveBeenCalled()
   })
+  it('422 de validación con messages -> REFUND_FAILURE con el motivo de Wompi (B-2524)', async () => {
+    const cuerpo = { error: { type: 'INPUT_VALIDATION_ERROR', messages: { transaction_id: ['La transacción no está aprobada'] } } }
+    refundTransaction.mockRejectedValue(new WompiHttpError('Wompi refund 422: secreto-interno', 422, cuerpo))
+    const { payload } = await correr()
+    expect(payload).toEqual({
+      result: 'REFUND_FAILURE',
+      amount: 3000,
+      message: 'Wompi rechazó la solicitud de reembolso: transaction_id: La transacción no está aprobada',
+    })
+    expect(JSON.stringify(payload)).not.toContain('secreto-interno')
+  })
+  it('4xx con cuerpo sin messages -> mensaje genérico (B-2524)', async () => {
+    refundTransaction.mockRejectedValue(new WompiHttpError('x', 403, { error: { type: 'FORBIDDEN' } }))
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ message: 'Wompi rechazó la solicitud de reembolso' })
+  })
   it.each([
     ['AbortError', Object.assign(new Error('secreto-interno'), { name: 'AbortError' })],
     ['fetch failed', new TypeError('fetch failed secreto-interno')],
