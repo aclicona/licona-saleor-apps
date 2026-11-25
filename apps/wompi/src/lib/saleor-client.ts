@@ -239,3 +239,38 @@ export async function listarTransaccionesConSolicitud(params: {
   }
   return resultado
 }
+
+// ─── Eventos de una transacción (B-2525) ─────────────────────────────────────
+
+const EVENTOS_DE_TRANSACCION = gql`
+  query EventosDeTransaccion($id: ID!) {
+    transaction(id: $id) {
+      id
+      events { type pspReference createdAt amount { amount } }
+    }
+  }
+`
+
+interface EventosDeTransaccionResponse {
+  transaction: {
+    id: string
+    events: Array<{ type: string; pspReference: string | null; createdAt: string; amount: { amount: number } }>
+  } | null
+}
+
+/** Eventos de una transacción de Saleor; `null` si no existe. Lanza si falla el transporte. */
+export async function obtenerEventosTransaccion(transactionId: string): Promise<EventoTransaccionSaleor[] | null> {
+  const client = crearClienteSaleor()
+  const data = await client.request<EventosDeTransaccionResponse>({
+    document: EVENTOS_DE_TRANSACCION,
+    variables: { id: transactionId },
+    signal: AbortSignal.timeout(TIMEOUT_SALEOR_MS),
+  })
+  if (!data?.transaction) return null
+  return data.transaction.events.map((e) => ({
+    type: e.type,
+    pspReference: e.pspReference,
+    createdAt: e.createdAt,
+    amount: Number(e.amount.amount),
+  }))
+}

@@ -58,6 +58,12 @@ Mismo motor, tras las anulaciones y antes del log final: cierra los `REFUND_REQU
 (`MARGEN_REEMBOLSO_PENDIENTE_MIN`) y después queda para revisión humana, nunca como fallo. Resumen en la clave
 opcional `reembolsos` (misma forma que `anulaciones`); un `errorApi` de anulaciones no impide que corran.
 
+- **Aceleración por evento `refund.updated` (B-2525):** `wompi-incoming` también cierra estos requests en cuanto Wompi
+  notifica el estado final (`APPROVED` → `REFUND_SUCCESS`; `DECLINED`/`ERROR`/`CANCELLED` → `REFUND_FAILURE`; `PENDING`/
+  `PROCESSING` no cambian nada). Misma firma y ventana de frescura que `transaction.updated`, más contraste con
+  `GET /refunds/{id}`. Solo cierra un `REFUND_REQUEST` cuyo psp sea exactamente el id del reembolso y que no tenga ya
+  `REFUND_SUCCESS/FAILURE`; un request sin id o desconocido se deja a esta conciliación (reportar con otro psp lo
+  contaría dos veces). La conciliación sigue siendo la red de seguridad (`webhooks/refund-updated.ts`).
 - **Sin id:** un request con psp `<pspTx>:reembolso-sin-id:<uuid>` se casa contra `refunds[]` de
   `GET /transactions/{pspTx}` por importe y fecha (B-1097, ver «Reembolsos sin id» abajo). Lo ambiguo queda en
   `log.error` (`estadoWompi`: `SIN_ID_AMBIGUO`, `CANDIDATOS_MULTIPLES`, `CONOCIDO_NO_CONSULTABLE`, `SIN_CANDIDATOS`

@@ -93,8 +93,8 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
       // SEGUIMIENTO PENDIENTE: el esquema síncrono de Saleor solo admite
       // REFUND_SUCCESS/REFUND_FAILURE; responder solo con `pspReference` (sin
       // `result`) lo trata como asíncrono: queda en REFUND_REQUEST a la espera
-      // de un `transactionEventReport` que hoy nadie envía. Falta una tarea
-      // que consulte GET /refunds/{id} y reporte el desenlace.
+      // de un `transactionEventReport`: lo envía el evento `refund.updated` (B-2525)
+      // o, como red de seguridad, la conciliación de reembolsos (B-1077).
       log.warn({ refundId: refund.id }, 'Reembolso pendiente en Wompi, revisar')
       return reply.send({ pspReference })
     }

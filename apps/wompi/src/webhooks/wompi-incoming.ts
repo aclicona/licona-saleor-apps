@@ -13,6 +13,7 @@ import { resumenPago } from '../lib/resumen-pago.js'
 import { eventoFresco, motivoDeDiscrepancia } from '../lib/contraste-wompi.js'
 import { wompiClient } from '../lib/wompi-client.js'
 import { WompiHttpError } from '../lib/wompi-error.js'
+import { reembolsoActualizado } from './refund-updated.js'
 
 /**
  * Estados de la transacción en Wompi → tipo de evento de `transactionEventReport`.
@@ -124,6 +125,9 @@ export async function wompiIncomingHandler(req: FastifyRequest, reply: FastifyRe
     )
     return reply.status(401).send({ error: 'Firma inválida' })
   }
+
+  // B-2525: el evento de reembolsos comparte endpoint y firma, pero no trae `data.transaction`.
+  if ((event as { event?: unknown })?.event === 'refund.updated') return reembolsoActualizado(reply, log, event)
 
   const txn = event?.data?.transaction
   if (!txn) {
