@@ -17,6 +17,9 @@ interface TransactionRefundPayload {
 const MAX_SONDEOS = 6
 const INTERVALO_SONDEO_MS = 1500
 
+// Estados no finales de un reembolso en Wompi (B-2523): se responde sin `result` final.
+const esPendiente = (status: string | undefined): boolean => status === 'PENDING' || status === 'PROCESSING'
+
 export { PLAZO_GLOBAL_MS }
 
 /** Mensajes fijos hacia Saleor: el texto del error real va solo al log. */
@@ -71,7 +74,7 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     // Wompi crea el reembolso en PENDING y lo aprueba unos segundos después.
     // Se sondea dentro del presupuesto del webhook síncrono de Saleor (18 s de
     // espera de respuesta: WEBHOOK_WAITING_FOR_RESPONSE_TIMEOUT).
-    for (let i = 0; i < MAX_SONDEOS && refund.status === 'PENDING'; i++) {
+    for (let i = 0; i < MAX_SONDEOS && esPendiente(refund.status); i++) {
       // Sin tiempo para esperar y sondear dentro del plazo: se omite y se responde no final con el id ya conocido.
       if (plazo.restanteMs() <= INTERVALO_SONDEO_MS) {
         log.warn({ refundId, restanteMs: plazo.restanteMs() }, 'Plazo global casi agotado: se omite el sondeo del reembolso')
@@ -85,7 +88,8 @@ export async function transactionRefundHandler(req: FastifyRequest, reply: Fasti
     if (refund.status === 'APPROVED') {
       return reply.send({ result: 'REFUND_SUCCESS', amount: action.amount, pspReference })
     }
-    if (refund.status === 'PENDING') {
+    if (esPendiente(refund.status)) {
+      // B-2523: PROCESSING es intermedio (el dinero aún puede devolverse): nunca REFUND_FAILURE.
       // SEGUIMIENTO PENDIENTE: el esquema síncrono de Saleor solo admite
       // REFUND_SUCCESS/REFUND_FAILURE; responder solo con `pspReference` (sin
       // `result`) lo trata como asíncrono: queda en REFUND_REQUEST a la espera

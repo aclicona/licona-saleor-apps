@@ -101,6 +101,23 @@ describe('transactionRefundHandler — POST /refunds con sondeo (B-432)', () => 
     expect(payload).toEqual({ pspReference: '30954' })
     expect(log.warn).toHaveBeenCalledWith(expect.anything(), 'Reembolso pendiente en Wompi, revisar')
   })
+  it('PROCESSING persistente -> no final (solo pspReference), nunca REFUND_FAILURE (B-2523)', async () => {
+    refundTransaction.mockResolvedValue(refund('PENDING'))
+    getRefund.mockResolvedValue(refund('PROCESSING'))
+    const { payload } = await correr()
+    expect(payload).toEqual({ pspReference: '30954' })
+  })
+  it('PROCESSING al crear -> se sondea y un APPROVED posterior da REFUND_SUCCESS (B-2523)', async () => {
+    refundTransaction.mockResolvedValue(refund('PROCESSING'))
+    getRefund.mockResolvedValue(refund('APPROVED'))
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ result: 'REFUND_SUCCESS' })
+  })
+  it('CANCELLED -> REFUND_FAILURE (B-2523)', async () => {
+    refundTransaction.mockResolvedValue(refund('CANCELLED'))
+    const { payload } = await correr()
+    expect(payload).toMatchObject({ result: 'REFUND_FAILURE' })
+  })
   it('DECLINED -> REFUND_FAILURE con status_message', async () => {
     refundTransaction.mockResolvedValue(refund('PENDING'))
     getRefund.mockResolvedValue(refund('DECLINED', { status_message: 'Sin fondos' }))
