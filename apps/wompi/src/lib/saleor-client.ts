@@ -79,12 +79,13 @@ interface TransactionEventReportResponse {
 const TIMEOUT_SALEOR_MS = 10_000
 
 /** Cliente GraphQL de Saleor con el token de la App. Lanza si falta la configuración. */
-function crearClienteSaleor(): GraphQLClient {
+function crearClienteSaleor(opciones: { errorPolicy?: 'all' } = {}): GraphQLClient {
   const apiUrl = process.env.SALEOR_API_URL
   const token = process.env.SALEOR_APP_TOKEN
   if (!apiUrl || !token) throw new Error('SALEOR_API_URL o SALEOR_APP_TOKEN no están configuradas')
 
   return new GraphQLClient(apiUrl, {
+    ...opciones,
     headers: { Authorization: `Bearer ${token}` },
   })
 }
@@ -280,48 +281,69 @@ export async function obtenerEventosTransaccion(transactionId: string): Promise<
 /** Tope propio de la consulta: corre dentro del plazo global del webhook de inicio y debe dejarle margen. */
 const TIMEOUT_TRANSACCIONES_CHECKOUT_MS = 4_000
 
-const TRANSACCIONES_DE_CHECKOUT = gql`
+export const QUERY_TRANSACCIONES_DE_CHECKOUT = gql`
   query TransaccionesDeCheckout($id: ID!) {
+    app { id }
     checkout(id: $id) {
       transactions {
         id
         pspReference
         createdAt
-        chargedAmount { amount }
-        events { type pspReference }
+        createdBy { __typename ... on App { id } }
+        events {
+          type
+          pspReference
+          createdBy { __typename ... on App { id } }
+        }
       }
     }
   }
 `
 
+/** Autor según Saleor: una App (con `id`), un usuario (solo `__typename`) o `null` (p. ej. un fallo que crea Saleor). */
+export type AutorSaleor = { __typename: string; id?: string } | null
+
 export interface TransaccionDeCheckout {
   id: string
   pspReference: string
   createdAt: string
-  chargedAmount: number
-  events: Array<{ type: string | null; pspReference: string }>
+  createdBy: AutorSaleor
+  events: Array<{ type: string | null; pspReference: string; createdBy: AutorSaleor }>
+}
+
+export interface TransaccionesDeCheckout {
+  /** Id de esta App en Saleor; ausente si Saleor no lo devolvió. */
+  appId?: string
+  transacciones: TransaccionDeCheckout[]
+  /** Mensajes de errores GraphQL que llegaron junto a datos utilizables. */
+  erroresParciales: string[]
 }
 
 interface TransaccionesDeCheckoutResponse {
-  checkout: {
-    transactions: Array<Omit<TransaccionDeCheckout, 'chargedAmount'> & { chargedAmount: { amount: number } }> | null
-  } | null
+  app: { id: string } | null
+  checkout: { transactions: TransaccionDeCheckout[] | null } | null
 }
 
 /**
  * Transacciones de un checkout (requiere HANDLE_PAYMENTS, que el manifiesto ya pide).
- * Lanza si falla el transporte o si Saleor no devuelve el checkout: «no sé» no es «no hay ninguna».
+ * `errorPolicy: 'all'`: un error en un campo anulable (`app`, `createdBy`) no tira la consulta, porque eso
+ * dejaría la guardia abierta; se trata como «autor desconocido». Lanza si falla el transporte o si no llega
+ * la lista de transacciones: «no sé» no es «no hay ninguna».
  */
 export async function obtenerTransaccionesDelCheckout(
   checkoutId: string,
   signal: AbortSignal,
-): Promise<TransaccionDeCheckout[]> {
-  const client = crearClienteSaleor()
-  const data = await client.request<TransaccionesDeCheckoutResponse>({
-    document: TRANSACCIONES_DE_CHECKOUT,
+): Promise<TransaccionesDeCheckout> {
+  const client = crearClienteSaleor({ errorPolicy: 'all' })
+  const { data, errors } = await client.rawRequest<TransaccionesDeCheckoutResponse>({
+    query: QUERY_TRANSACCIONES_DE_CHECKOUT,
     variables: { id: checkoutId },
     signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_TRANSACCIONES_CHECKOUT_MS)]),
   })
-  if (!data?.checkout) throw new Error('Saleor no devolvió el checkout')
-  return (data.checkout.transactions ?? []).map((t) => ({ ...t, chargedAmount: Number(t.chargedAmount.amount) }))
+  const erroresParciales = (errors ?? []).map((e) => e.message)
+  const transacciones = data?.checkout?.transactions
+  if (!transacciones) {
+    throw new Error(`Saleor no devolvió las transacciones del checkout: ${erroresParciales.join('; ')}`)
+  }
+  return { appId: data.app?.id, transacciones, erroresParciales }
 }

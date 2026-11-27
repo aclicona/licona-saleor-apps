@@ -49,19 +49,31 @@ Antes de crear una transacción en Wompi (tras validar CARD/PSE y antes del acce
 permiso `HANDLE_PAYMENTS`, timeout 4 s) y pregunta a Wompi por las que siguen abiertas. Saleor solo sabe lo
 que se le reportó: **la verdad es Wompi**. Solo aplica si `sourceObject.id` es un Checkout.
 
-**Candidata:** otra transacción del checkout, creada hace menos del TTL, sin `CHARGE_SUCCESS` y sin
-`CHARGE_FAILURE` con `pspReference` (un fallo sin él no prueba nada en Wompi). Se consultan como máximo las
-5 más recientes, en paralelo y dentro del plazo global: `getTransaction(pspReference)` o, sin él,
+**Candidata:** otra transacción del checkout **de esta App** (`createdBy` frente a `app { id }`; sin autor
+conocido, o si Saleor no devuelve `app`, no se descarta), creada hace menos del TTL y sin resultado final.
+
+**Resultado final:** `CHARGE_SUCCESS`, o `CHARGE_FAILURE` que traiga `pspReference` **o que haya creado esta
+App** (sus rechazos son finales aunque no tengan `pspReference`). El `CHARGE_FAILURE` sin autor ni
+`pspReference` lo crea Saleor cuando no recibe respuesta («Failed to delivery request.»): el cobro puede
+existir, así que sigue siendo candidata.
+
+Se consultan como máximo las 5 candidatas más recientes, en paralelo, con un tope común de 4 s (y nunca más
+que el plazo global): `getTransaction(pspReference)` o, sin él,
 `findTransactionsByReference(referenciaParaWompi(id))`.
+
+La consulta a Saleor usa `errorPolicy: 'all'`: un error en un campo anulable (`app`, `createdBy`) se registra
+(`warn`) y se decide con lo recibido; si no llega la lista de transacciones cuenta como consulta fallida. Los
+resolvers del fork no exigen permisos para `createdBy` (tampoco de otra app o de un usuario); la query se
+valida contra el esquema con `SALEOR_SCHEMA_PATH=<schema.graphql> pnpm --filter @licona/app-wompi test`.
 
 | Situación | Resultado |
 |---|---|
 | Sin candidatas | procede |
 | Alguna candidata `PENDING` o `APPROVED` en Wompi (o con un estado desconocido) | rechaza: «Ya hay un pago en curso para este carrito» |
 | Todas `DECLINED`, `ERROR` o `VOIDED` | procede |
-| Sin rastro en Wompi (búsqueda por reference vacía) | procede, salvo carrera |
+| Sin rastro en Wompi (búsqueda por reference vacía, o 404 al consultar por id) | procede, salvo carrera |
 | Carrera: sin rastro, creada hace menos de 30 s y más antigua que la actual (empate: menor id) | la actual cede: «Ya hay un pago en curso para este carrito» |
-| Wompi no responde (o error HTTP) sobre alguna candidata y ninguna está viva | rechaza (fail-closed): «No se pudo comprobar un pago anterior; reintente» |
+| Wompi no responde (o error HTTP distinto de ese 404, o se agota el tope) sobre alguna candidata y ninguna está viva | rechaza (fail-closed): «No se pudo comprobar un pago anterior; reintente» |
 | Saleor no responde la consulta | procede (fail-open) con log `error` |
 | Candidata más antigua que el TTL | no bloquea; log `warn` si tenía `pspReference` |
 | `action.amount <= 0` (Saleor ya descontó lo cobrado) | rechaza antes de hablar con Wompi: «El carrito no tiene saldo por cobrar» |
@@ -69,6 +81,18 @@ que se le reportó: **la verdad es Wompi**. Solo aplica si `sourceObject.id` es 
 **TTL:** 30 minutos; `WOMPI_BLOQUEO_PENDIENTE_MIN` (entero positivo; inválido → 30). El rechazo es
 `CHARGE_FAILURE` sin `pspReference`, `data` ni `actions`: para esa transacción no se creó nada en Wompi, así
 que no contradice el contrato B-1061.
+
+**Límites conocidos** (la guardia no los cubre):
+
+- `transactionInitialize` con `amount` explícito sobre un checkout ya cobrado: Saleor usa ese importe y las
+  transacciones cobradas no son candidatas. El storefront no envía `amount`.
+- La edad (TTL y ventana de carrera) compara el reloj de la App con el `createdAt` de Saleor; un desfase entre
+  ambos acorta o alarga las ventanas.
+- Cambiar `WOMPI_REFERENCIA_CODIFICADA` con pagos en vuelo: las candidatas sin `pspReference` se buscan con
+  la codificación actual y las creadas con la anterior no se encuentran.
+- `transaction-process` responde `CHARGE_FAILURE` sin `pspReference` cuando no tiene qué consultar (por ejemplo
+  tras un inicio de estado desconocido). Ese fallo lo crea la App, así que la transacción deja de ser candidata.
+- Más de 5 transacciones abiertas: solo se consultan las 5 más recientes.
 
 ## Contrato transversal: «estado desconocido ≠ rechazo» (B-1061)
 

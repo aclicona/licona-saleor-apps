@@ -16,7 +16,7 @@ vi.mock('@licona/webhook-utils', async (importOriginal) => ({
 // la pasarela, no cómo se serializa el HTTP.
 vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
 // B-2616: sin transacciones previas en el checkout, la guardia de segundo cobro no interviene.
-vi.mock('../lib/saleor-client.js', () => ({ obtenerTransaccionesDelCheckout: vi.fn().mockResolvedValue([]) }))
+vi.mock('../lib/saleor-client.js', () => ({ obtenerTransaccionesDelCheckout: vi.fn().mockResolvedValue({ transacciones: [], erroresParciales: [] }) }))
 
 import { wompiClient } from '../lib/wompi-client.js'
 import type { CreateTransactionParams, WompiTransaction } from '../lib/wompi-client.js'

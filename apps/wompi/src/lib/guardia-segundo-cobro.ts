@@ -4,9 +4,15 @@
  * Tabla de decisión y TTL: `docs/wompi-estados.md`.
  */
 
-import { obtenerTransaccionesDelCheckout, type TransaccionDeCheckout } from './saleor-client.js'
+import {
+  obtenerTransaccionesDelCheckout,
+  type AutorSaleor,
+  type TransaccionDeCheckout,
+  type TransaccionesDeCheckout,
+} from './saleor-client.js'
 import { referenciaParaWompi } from './referencia.js'
 import type { WompiTransaction } from './wompi-client.js'
+import { WompiHttpError } from './wompi-error.js'
 
 /** Mensajes fijos hacia Saleor: el texto de un error va solo al log. */
 export const MENSAJE_PAGO_EN_CURSO = 'Ya hay un pago en curso para este carrito'
@@ -17,6 +23,8 @@ const TTL_POR_DEFECTO_MIN = 30
 const VENTANA_CARRERA_MS = 30_000
 /** Tope de consultas a Wompi por inicio: caben en el plazo del webhook. */
 const MAX_CANDIDATAS = 5
+/** Tope de toda la fase de Wompi (consultas en paralelo): deja plazo para el token y la creación. */
+const TIMEOUT_FASE_WOMPI_MS = 4_000
 const ESTADOS_QUE_NO_BLOQUEAN: ReadonlySet<string> = new Set(['DECLINED', 'ERROR', 'VOIDED'])
 const PREFIJO_CHECKOUT = 'Checkout:'
 
@@ -27,18 +35,33 @@ export function ttlBloqueoMs(env: NodeJS.ProcessEnv = process.env): number {
   return minutos * 60_000
 }
 
-/** Sin resultado final: ni cobrada, ni fallada por la pasarela (un fallo sin `pspReference` no prueba nada). */
-function sinResultadoFinal(t: TransaccionDeCheckout): boolean {
-  return !t.events.some((e) => e.type === 'CHARGE_SUCCESS' || (e.type === 'CHARGE_FAILURE' && Boolean(e.pspReference)))
+/** ¿El autor es esta App? Sin `appId` conocido vale cualquier App. */
+function esNuestraApp(autor: AutorSaleor, appId: string | undefined): boolean {
+  return Boolean(autor?.id) && (appId === undefined || autor?.id === appId)
+}
+
+/** Otra App o un usuario. Sin autor o sin `appId` no se puede afirmar: se considera propia. */
+function esAjena(t: TransaccionDeCheckout, appId: string | undefined): boolean {
+  return appId !== undefined && t.createdBy !== null && t.createdBy.id !== appId
+}
+
+/**
+ * Cobrada, o fallada con prueba: el fallo trae `pspReference` o lo respondió esta App (que solo falla cuando
+ * no hay cobro). Uno sin ambas cosas lo crea Saleor cuando no recibe respuesta, y el cobro puede existir.
+ */
+function tieneResultadoFinal(t: TransaccionDeCheckout, appId: string | undefined): boolean {
+  return t.events.some(
+    (e) =>
+      e.type === 'CHARGE_SUCCESS' ||
+      (e.type === 'CHARGE_FAILURE' && (Boolean(e.pspReference) || esNuestraApp(e.createdBy, appId))),
+  )
 }
 
 export function seleccionarCandidatas(
   transacciones: readonly TransaccionDeCheckout[],
-  miId: string,
-  ahora: Date,
-  ttlMs: number,
+  { miId, appId, ahora, ttlMs }: { miId: string; appId: string | undefined; ahora: Date; ttlMs: number },
 ): { candidatas: TransaccionDeCheckout[]; vencidas: TransaccionDeCheckout[] } {
-  const abiertas = transacciones.filter((t) => t.id !== miId && sinResultadoFinal(t))
+  const abiertas = transacciones.filter((t) => t.id !== miId && !esAjena(t, appId) && !tieneResultadoFinal(t, appId))
   const vigente = (t: TransaccionDeCheckout) => ahora.getTime() - Date.parse(t.createdAt) < ttlMs
   return {
     candidatas: abiertas
@@ -108,13 +131,21 @@ export interface ParametrosGuardia {
 
 export type ResultadoGuardia = { bloquear: false } | { bloquear: true; message: string }
 
-async function consultarWompi(candidata: TransaccionDeCheckout, p: ParametrosGuardia): Promise<ConsultaWompi> {
+async function consultarWompi(
+  candidata: TransaccionDeCheckout,
+  p: ParametrosGuardia,
+  signal: AbortSignal,
+): Promise<ConsultaWompi> {
   try {
     const encontradas = candidata.pspReference
-      ? [await p.wompi.getTransaction(candidata.pspReference, p.signal)]
-      : await p.wompi.findTransactionsByReference(referenciaParaWompi(candidata.id), p.signal)
+      ? [await p.wompi.getTransaction(candidata.pspReference, signal)]
+      : await p.wompi.findTransactionsByReference(referenciaParaWompi(candidata.id), signal)
     return { tipo: 'wompi', estados: encontradas.map((t) => t.status) }
   } catch (err) {
+    // 404 por id: Wompi asegura que esa transacción no existe. Es «sin rastro», no un fallo.
+    if (candidata.pspReference && err instanceof WompiHttpError && err.status === 404) {
+      return { tipo: 'wompi', estados: [] }
+    }
     p.log.error(
       { err, transaccionPrevia: candidata.id, restanteMs: p.restanteMs() },
       'Guardia de segundo cobro: Wompi no respondió sobre una transacción previa',
@@ -128,9 +159,9 @@ export async function comprobarSegundoCobro(p: ParametrosGuardia): Promise<Resul
   const checkoutId = idDeCheckout(p.checkoutId)
   if (!checkoutId) return { bloquear: false }
 
-  let transacciones: TransaccionDeCheckout[]
+  let lectura: TransaccionesDeCheckout
   try {
-    transacciones = await obtenerTransaccionesDelCheckout(checkoutId, p.signal)
+    lectura = await obtenerTransaccionesDelCheckout(checkoutId, p.signal)
   } catch (err) {
     p.log.error(
       { err, restanteMs: p.restanteMs() },
@@ -139,8 +170,21 @@ export async function comprobarSegundoCobro(p: ParametrosGuardia): Promise<Resul
     return { bloquear: false }
   }
 
+  const { appId, transacciones, erroresParciales } = lectura
+  if (erroresParciales.length > 0) {
+    p.log.warn(
+      { erroresParciales, restanteMs: p.restanteMs() },
+      'Guardia de segundo cobro: Saleor respondió con errores parciales; se decide con lo recibido',
+    )
+  }
+
   const ahora = new Date()
-  const { candidatas, vencidas } = seleccionarCandidatas(transacciones, p.transactionId, ahora, ttlBloqueoMs())
+  const { candidatas, vencidas } = seleccionarCandidatas(transacciones, {
+    miId: p.transactionId,
+    appId,
+    ahora,
+    ttlMs: ttlBloqueoMs(),
+  })
   // Solo las que llegaron a Wompi (tienen pspReference): las abandonadas sin él serían ruido.
   const vencidasEnWompi = vencidas.filter((t) => t.pspReference).map((t) => t.id)
   if (vencidasEnWompi.length > 0) {
@@ -151,8 +195,9 @@ export async function comprobarSegundoCobro(p: ParametrosGuardia): Promise<Resul
   }
   if (candidatas.length === 0) return { bloquear: false }
 
+  const signal = AbortSignal.any([p.signal, AbortSignal.timeout(TIMEOUT_FASE_WOMPI_MS)])
   const consultadas = await Promise.all(
-    candidatas.map(async (candidata) => ({ candidata, consulta: await consultarWompi(candidata, p) })),
+    candidatas.map(async (candidata) => ({ candidata, consulta: await consultarWompi(candidata, p, signal) })),
   )
   // Si mi transacción aún no aparece en la lista, es la más nueva.
   const mia = transacciones.find((t) => t.id === p.transactionId) ?? { id: p.transactionId, createdAt: ahora.toISOString() }

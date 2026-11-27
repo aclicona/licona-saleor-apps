@@ -1,14 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const request = vi.fn()
+const rawRequest = vi.fn()
+const opciones = vi.fn()
 vi.mock('graphql-request', () => ({
   gql: (strings: TemplateStringsArray, ...vals: unknown[]) => strings.reduce((a, s, i) => a + s + (vals[i] ?? ''), ''),
   GraphQLClient: class {
     request = request
+    rawRequest = rawRequest
+    constructor(_url: string, config: unknown) {
+      opciones(config)
+    }
   },
 }))
 
+import { readFileSync } from 'node:fs'
+import { validarSubscriptions } from '@licona/webhook-utils'
 import {
+  QUERY_TRANSACCIONES_DE_CHECKOUT,
   listarTransaccionesConSolicitud,
   obtenerTransaccionesDelCheckout,
   reportTransactionEvent,
@@ -95,39 +104,67 @@ describe('reportTransactionEvent: availableActions', () => {
 
 describe('obtenerTransaccionesDelCheckout (B-2616)', () => {
   beforeEach(() => {
-    request.mockReset()
+    rawRequest.mockReset()
+    opciones.mockReset()
     process.env.SALEOR_API_URL = 'https://saleor.test/graphql/'
     process.env.SALEOR_APP_TOKEN = 'tok'
   })
   const señal = () => new AbortController().signal
+  const autor = { __typename: 'App', id: 'A1' }
+  const transaccion = {
+    id: 'T1',
+    pspReference: 'p',
+    createdAt: '2026-11-27T12:00:00Z',
+    createdBy: autor,
+    events: [{ type: 'CHARGE_REQUEST', pspReference: 'p', createdBy: autor }],
+  }
 
-  it('consulta por id de checkout y aplana el importe cobrado', async () => {
-    const evento = { type: 'CHARGE_REQUEST', pspReference: 'p' }
-    request.mockResolvedValue({
-      checkout: {
-        transactions: [
-          { id: 'T1', pspReference: 'p', createdAt: '2026-11-27T12:00:00Z', chargedAmount: { amount: '5' }, events: [evento] },
-        ],
-      },
+  it('devuelve la App propia y las transacciones del checkout', async () => {
+    rawRequest.mockResolvedValue({ data: { app: { id: 'A1' }, checkout: { transactions: [transaccion] } } })
+
+    await expect(obtenerTransaccionesDelCheckout('C1', señal())).resolves.toEqual({
+      appId: 'A1',
+      transacciones: [transaccion],
+      erroresParciales: [],
+    })
+    expect(rawRequest.mock.calls[0][0].variables).toEqual({ id: 'C1' })
+    expect(rawRequest.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal)
+    expect(opciones).toHaveBeenCalledWith(expect.objectContaining({ errorPolicy: 'all' }))
+  })
+
+  it('tolera errores parciales y los devuelve para el log', async () => {
+    rawRequest.mockResolvedValue({
+      data: { app: null, checkout: { transactions: [{ ...transaccion, createdBy: null }] } },
+      errors: [{ message: 'no se pudo resolver createdBy' }],
     })
 
-    await expect(obtenerTransaccionesDelCheckout('C1', señal())).resolves.toEqual([
-      { id: 'T1', pspReference: 'p', createdAt: '2026-11-27T12:00:00Z', chargedAmount: 5, events: [evento] },
-    ])
-    expect(request.mock.calls[0][0].variables).toEqual({ id: 'C1' })
-    expect(request.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal)
+    await expect(obtenerTransaccionesDelCheckout('C1', señal())).resolves.toMatchObject({
+      appId: undefined,
+      transacciones: [{ id: 'T1', createdBy: null }],
+      erroresParciales: ['no se pudo resolver createdBy'],
+    })
   })
 
   it('la señal se corta con el plazo recibido', async () => {
-    request.mockResolvedValue({ checkout: { transactions: [] } })
+    rawRequest.mockResolvedValue({ data: { checkout: { transactions: [] } } })
     const plazo = new AbortController()
     await obtenerTransaccionesDelCheckout('C1', plazo.signal)
     plazo.abort()
-    expect(request.mock.calls[0][0].signal.aborted).toBe(true)
+    expect(rawRequest.mock.calls[0][0].signal.aborted).toBe(true)
   })
 
-  it('checkout inexistente: lanza (no se puede afirmar que no haya transacciones)', async () => {
-    request.mockResolvedValue({ checkout: null })
+  it.each([
+    ['checkout inexistente', { checkout: null }],
+    ['lista anulada por un error', { checkout: { transactions: null } }],
+    ['sin data', undefined],
+  ])('%s: lanza (no se puede afirmar que no haya transacciones)', async (_nombre, data) => {
+    rawRequest.mockResolvedValue({ data, errors: [{ message: 'x' }] })
     await expect(obtenerTransaccionesDelCheckout('C1', señal())).rejects.toThrow('checkout')
+  })
+
+  // El esquema vive en el fork (como en `check:subscriptions`): se valida cuando SALEOR_SCHEMA_PATH está definida.
+  it.skipIf(!process.env.SALEOR_SCHEMA_PATH)('la query es válida contra el esquema del fork', () => {
+    const esquema = readFileSync(process.env.SALEOR_SCHEMA_PATH as string, 'utf8')
+    expect(validarSubscriptions([{ name: 'TransaccionesDeCheckout', query: QUERY_TRANSACCIONES_DE_CHECKOUT }], esquema)).toEqual([])
   })
 })

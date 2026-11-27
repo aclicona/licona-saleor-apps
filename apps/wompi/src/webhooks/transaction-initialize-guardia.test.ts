@@ -37,7 +37,10 @@ async function ejecutar(cambios: Record<string, unknown> = {}) {
   return respuesta as Record<string, unknown>
 }
 
-const otra = () => ({ id: 'otra', pspReference: 'psp-otra', createdAt: new Date(Date.now() - 60_000).toISOString(), chargedAmount: 0, events: [] })
+const otra = () => ({
+  transacciones: [{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date(Date.now() - 60_000).toISOString(), createdBy: null, events: [] }],
+  erroresParciales: [],
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -49,7 +52,7 @@ beforeEach(() => {
     getTransaction,
     findTransactionsByReference,
   } as unknown as ReturnType<typeof wompiClient>)
-  vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue([otra()])
+  vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue(otra())
 })
 
 describe('guardia de segundo cobro en transaction-initialize (B-2616)', () => {

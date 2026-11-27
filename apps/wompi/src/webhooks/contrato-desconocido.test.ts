@@ -14,7 +14,10 @@ vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
 // B-2616: la guardia de segundo cobro consulta Saleor; aquí hay siempre un pago anterior sin resolver.
 vi.mock('../lib/saleor-client.js', () => ({
   obtenerTransaccionesDelCheckout: vi.fn(() =>
-    Promise.resolve([{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date().toISOString(), chargedAmount: 0, events: [] }]),
+    Promise.resolve({
+      transacciones: [{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date().toISOString(), createdBy: null, events: [] }],
+      erroresParciales: [],
+    }),
   ),
 }))
 

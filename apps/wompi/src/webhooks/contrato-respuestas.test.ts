@@ -23,7 +23,10 @@ vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
 // B-2616: un pago anterior sin resolver en el checkout (solo corre si el cuerpo trae un id de Checkout).
 vi.mock('../lib/saleor-client.js', () => ({
   obtenerTransaccionesDelCheckout: () =>
-    Promise.resolve([{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date().toISOString(), chargedAmount: 0, events: [] }]),
+    Promise.resolve({
+      transacciones: [{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date().toISOString(), createdBy: null, events: [] }],
+      erroresParciales: [],
+    }),
 }))
 // Único valor aleatorio en una respuesta: la referencia sin-id del reembolso desconocido.
 vi.mock('node:crypto', async (importOriginal) => ({

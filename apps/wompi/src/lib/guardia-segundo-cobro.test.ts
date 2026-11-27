@@ -12,6 +12,7 @@ import {
   ttlBloqueoMs,
 } from './guardia-segundo-cobro.js'
 import type { WompiTransaction } from './wompi-client.js'
+import { WompiHttpError } from './wompi-error.js'
 
 const AHORA = new Date('2026-11-27T12:00:00Z')
 const MIN = 60_000
@@ -20,12 +21,27 @@ const CHECKOUT = Buffer.from('Checkout:1').toString('base64')
 const MIA = 'mia'
 const hace = (ms: number) => new Date(AHORA.getTime() - ms).toISOString()
 
+const APP = 'QXBwOjE='
+const NUESTRA_APP = { __typename: 'App', id: APP }
+const OTRA_APP = { __typename: 'App', id: 'QXBwOjI=' }
+const USUARIO = { __typename: 'User' }
 const txn = (id: string, edadMs: number, extra: Partial<TransaccionDeCheckout> = {}): TransaccionDeCheckout => ({
   id,
   pspReference: `psp-${id}`,
   createdAt: hace(edadMs),
-  chargedAmount: 0,
+  createdBy: NUESTRA_APP,
   events: [],
+  ...extra,
+})
+const evento = (type: string, pspReference = '', createdBy: TransaccionDeCheckout['createdBy'] = NUESTRA_APP) => ({ type, pspReference, createdBy })
+/** Lo que deja en Saleor un rechazo respondido por esta App: sin pspReference en ningún sitio. */
+const rechazada = (id: string, edadMs: number) => txn(id, edadMs, { pspReference: '', events: [evento('CHARGE_FAILURE')] })
+/** «Failed to delivery request.»: el fallo lo crea Saleor, sin autor. */
+const sinEntrega = (id: string, edadMs: number) => txn(id, edadMs, { pspReference: '', events: [evento('CHARGE_FAILURE', '', null)] })
+const respuesta = (transacciones: TransaccionDeCheckout[], extra: Record<string, unknown> = {}) => ({
+  appId: APP,
+  transacciones,
+  erroresParciales: [],
   ...extra,
 })
 const wompiTxn = (status: string) => ({ id: 'w', status }) as unknown as WompiTransaction
@@ -35,7 +51,7 @@ const findTransactionsByReference = vi.fn()
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 
 function conSaleor(...transacciones: TransaccionDeCheckout[]) {
-  vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue([txn(MIA, 0, { pspReference: '' }), ...transacciones])
+  vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue(respuesta([txn(MIA, 0, { pspReference: '' }), ...transacciones]))
 }
 
 const comprobar = (checkoutId: unknown = CHECKOUT) =>
@@ -57,6 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
 })
 
 describe('ttlBloqueoMs', () => {
@@ -74,25 +91,49 @@ describe('ttlBloqueoMs', () => {
 })
 
 describe('seleccionarCandidatas', () => {
-  it('excluye la propia, las cobradas, las falladas con pspReference y las vencidas', () => {
-    const cobrada = txn('ok', MIN, { events: [{ type: 'CHARGE_SUCCESS', pspReference: 'p' }] })
-    const fallida = txn('ko', MIN, { events: [{ type: 'CHARGE_FAILURE', pspReference: 'p' }] })
-    const fallidaSinPsp = txn('ko-sin', MIN, { pspReference: '', events: [{ type: 'CHARGE_FAILURE', pspReference: '' }] })
-    const vencida = txn('vieja', TTL)
+  const seleccionar = (transacciones: TransaccionDeCheckout[], appId: string | undefined = APP) =>
+    seleccionarCandidatas(transacciones, { miId: MIA, appId, ahora: AHORA, ttlMs: TTL })
+  const ids = (r: { candidatas: TransaccionDeCheckout[] }) => r.candidatas.map((t) => t.id)
 
-    const { candidatas, vencidas } = seleccionarCandidatas([txn(MIA, 0), cobrada, fallida, fallidaSinPsp, vencida], MIA, AHORA, TTL)
+  it('excluye la propia, las cobradas, las falladas y las vencidas', () => {
+    const cobrada = txn('ok', MIN, { events: [evento('CHARGE_SUCCESS', 'p')] })
+    const fallida = txn('ko', MIN, { events: [evento('CHARGE_FAILURE', 'p', null)] })
 
-    expect(candidatas.map((t) => t.id)).toEqual(['ko-sin'])
-    expect(vencidas.map((t) => t.id)).toEqual(['vieja'])
+    const r = seleccionar([txn(MIA, 0), cobrada, fallida, rechazada('rechazo', MIN), sinEntrega('sin-entrega', MIN), txn('vieja', TTL)])
+
+    expect(ids(r)).toEqual(['sin-entrega'])
+    expect(r.vencidas.map((t) => t.id)).toEqual(['vieja'])
+  })
+
+  it('un fallo sin pspReference creado por otro autor no es final', () => {
+    const deOtra = txn('otra-app', MIN, { events: [evento('CHARGE_FAILURE', '', OTRA_APP)] })
+    const deUsuario = txn('usuario', 2 * MIN, { events: [evento('CHARGE_FAILURE', '', USUARIO)] })
+    expect(ids(seleccionar([deOtra, deUsuario]))).toEqual(['otra-app', 'usuario'])
+  })
+
+  it('descarta las transacciones de otra app o de un usuario; sin autor conocido se quedan', () => {
+    const r = seleccionar([
+      txn('nuestra', MIN),
+      txn('ajena', 2 * MIN, { createdBy: OTRA_APP }),
+      txn('manual', 3 * MIN, { createdBy: USUARIO }),
+      txn('anonima', 4 * MIN, { createdBy: null }),
+    ])
+    expect(ids(r)).toEqual(['nuestra', 'anonima'])
+  })
+
+  it('sin appId no filtra por autor y el fallo de cualquier App es final', () => {
+    const r = seleccionarCandidatas(
+      [txn('ajena', MIN, { createdBy: OTRA_APP }), txn('manual', 2 * MIN, { createdBy: USUARIO }), rechazada('rechazo', MIN)],
+      { miId: MIA, appId: undefined, ahora: AHORA, ttlMs: TTL },
+    )
+    expect(ids(r)).toEqual(['ajena', 'manual'])
   })
 
   it('deja solo las 5 más recientes, sin mutar la entrada', () => {
     const entrada = [7, 2, 5, 1, 6, 3, 4].map((n) => txn(`t${n}`, n * MIN))
     const copia = [...entrada]
 
-    const { candidatas } = seleccionarCandidatas(entrada, MIA, AHORA, TTL)
-
-    expect(candidatas.map((t) => t.id)).toEqual(['t1', 't2', 't3', 't4', 't5'])
+    expect(ids(seleccionar(entrada))).toEqual(['t1', 't2', 't3', 't4', 't5'])
     expect(entrada).toEqual(copia)
   })
 })
@@ -142,7 +183,7 @@ describe('comprobarSegundoCobro', () => {
   })
 
   it('CHARGE_FAILURE con pspReference procede sin consultar', async () => {
-    conSaleor(txn('otra', MIN, { events: [{ type: 'CHARGE_FAILURE', pspReference: 'psp-otra' }] }))
+    conSaleor(txn('otra', MIN, { events: [evento('CHARGE_FAILURE', 'psp-otra')] }))
     expect(await comprobar()).toEqual({ bloquear: false })
     expect(getTransaction).not.toHaveBeenCalled()
   })
@@ -186,10 +227,9 @@ describe('comprobarSegundoCobro', () => {
   })
 
   it('carrera: la mía es la más antigua, procede', async () => {
-    vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue([
-      txn(MIA, 8_000, { pspReference: '' }),
-      txn('otra', 2_000, { pspReference: '' }),
-    ])
+    vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue(
+      respuesta([txn(MIA, 8_000, { pspReference: '' }), txn('otra', 2_000, { pspReference: '' })]),
+    )
     expect(await comprobar()).toEqual({ bloquear: false })
   })
 
@@ -207,7 +247,7 @@ describe('comprobarSegundoCobro', () => {
   })
 
   it('ignora mi propia transacción', async () => {
-    vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue([txn(MIA, MIN)])
+    vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue(respuesta([txn(MIA, MIN)]))
     expect(await comprobar()).toEqual({ bloquear: false })
     expect(getTransaction).not.toHaveBeenCalled()
   })
@@ -231,6 +271,90 @@ describe('comprobarSegundoCobro', () => {
     getTransaction.mockResolvedValue(wompiTxn('DECLINED'))
     await comprobar()
     expect(getTransaction).toHaveBeenCalledTimes(5)
+  })
+
+  it('6 rechazos de la App no tapan un PENDING más antiguo', async () => {
+    conSaleor(...[1, 2, 3, 4, 5, 6].map((n) => rechazada(`r${n}`, n * MIN)), txn('pendiente', 10 * MIN))
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_PAGO_EN_CURSO })
+    expect(getTransaction).toHaveBeenCalledWith('psp-pendiente', expect.any(AbortSignal))
+    expect(findTransactionsByReference).not.toHaveBeenCalled()
+  })
+
+  it('un rechazo de la App de hace 5 s no bloquea el reintento', async () => {
+    conSaleor(rechazada('r', 5_000))
+    expect(await comprobar()).toEqual({ bloquear: false })
+    expect(findTransactionsByReference).not.toHaveBeenCalled()
+  })
+
+  it('un fallo de entrega de Saleor (sin autor) de hace 5 s sigue siendo candidata', async () => {
+    conSaleor(sinEntrega('s', 5_000))
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_PAGO_EN_CURSO })
+    expect(findTransactionsByReference).toHaveBeenCalledWith('s', expect.any(AbortSignal))
+  })
+
+  it('una transacción de otra app no se consulta en Wompi', async () => {
+    conSaleor(txn('ajena', MIN, { createdBy: OTRA_APP }))
+    expect(await comprobar()).toEqual({ bloquear: false })
+    expect(getTransaction).not.toHaveBeenCalled()
+  })
+
+  it('404 de getTransaction es «sin rastro», no un fallo', async () => {
+    conSaleor(txn('otra', MIN))
+    getTransaction.mockRejectedValue(new WompiHttpError('Wompi 404', 404))
+    expect(await comprobar()).toEqual({ bloquear: false })
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it.each([401, 429, 500])('un %d de getTransaction sigue bloqueando', async (status) => {
+    conSaleor(txn('otra', MIN))
+    getTransaction.mockRejectedValue(new WompiHttpError('Wompi', status))
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_SIN_COMPROBAR })
+  })
+
+  it('la fase de Wompi tiene tope propio de 4 s y deja restanteMs al salir', async () => {
+    const tope = new AbortController()
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(tope.signal)
+    conSaleor(txn('otra', MIN))
+    getTransaction.mockImplementation(
+      (_id: string, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('abortada')))
+          tope.abort()
+        }),
+    )
+
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_SIN_COMPROBAR })
+    expect(timeout).toHaveBeenCalledWith(4_000)
+    expect(log.warn).toHaveBeenLastCalledWith(expect.objectContaining({ restanteMs: 12_000 }), expect.any(String))
+  })
+
+  it('el plazo global también corta la fase de Wompi', async () => {
+    const plazo = new AbortController()
+    conSaleor(txn('otra', MIN))
+    getTransaction.mockImplementation(
+      (_id: string, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('abortada')))
+          plazo.abort()
+        }),
+    )
+    const r = await comprobarSegundoCobro({
+      checkoutId: CHECKOUT,
+      transactionId: MIA,
+      wompi: { getTransaction, findTransactionsByReference },
+      signal: plazo.signal,
+      restanteMs: () => 0,
+      log,
+    })
+    expect(r).toEqual({ bloquear: true, message: MENSAJE_SIN_COMPROBAR })
+  })
+
+  it('los errores parciales de Saleor se registran y la guardia sigue', async () => {
+    vi.mocked(obtenerTransaccionesDelCheckout).mockResolvedValue(
+      respuesta([txn('otra', MIN, { createdBy: null })], { erroresParciales: ['createdBy falló'] }),
+    )
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_PAGO_EN_CURSO })
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ erroresParciales: ['createdBy falló'] }), expect.any(String))
   })
 
   it('los mensajes hacia Saleor son fijos', () => {
