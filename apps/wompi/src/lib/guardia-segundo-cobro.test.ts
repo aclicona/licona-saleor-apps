@@ -292,6 +292,36 @@ describe('comprobarSegundoCobro', () => {
     expect(findTransactionsByReference).toHaveBeenCalledWith('s', expect.any(AbortSignal))
   })
 
+  it('un rechazo de la App anterior a un cobro con la misma clave no esconde ese cobro', async () => {
+    conSaleor(
+      txn('reintentada', MIN, {
+        pspReference: 'w1',
+        events: [evento('CHARGE_FAILURE'), evento('CHARGE_ACTION_REQUIRED', 'w1')],
+      }),
+    )
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_PAGO_EN_CURSO })
+    expect(getTransaction).toHaveBeenCalledWith('w1', expect.any(AbortSignal))
+  })
+
+  it('un fallo de la App tras un inicio de estado desconocido no es final: decide Wompi por reference', async () => {
+    conSaleor(
+      txn('ambigua', MIN, {
+        pspReference: '',
+        events: [evento('CHARGE_ACTION_REQUIRED'), evento('CHARGE_FAILURE')],
+      }),
+    )
+    findTransactionsByReference.mockResolvedValue([wompiTxn('PENDING')])
+    expect(await comprobar()).toEqual({ bloquear: true, message: MENSAJE_PAGO_EN_CURSO })
+    expect(findTransactionsByReference).toHaveBeenCalledWith('ambigua', expect.any(AbortSignal))
+  })
+
+  it('con solo un fallo de la App y ningún indicio de cobro no es candidata', async () => {
+    conSaleor(txn('solo-rechazo', MIN, { pspReference: '', events: [evento('CHARGE_FAILURE')] }))
+    findTransactionsByReference.mockResolvedValue([wompiTxn('PENDING')])
+    expect(await comprobar()).toEqual({ bloquear: false })
+    expect(findTransactionsByReference).not.toHaveBeenCalled()
+  })
+
   it('una transacción de otra app no se consulta en Wompi', async () => {
     conSaleor(txn('ajena', MIN, { createdBy: OTRA_APP }))
     expect(await comprobar()).toEqual({ bloquear: false })

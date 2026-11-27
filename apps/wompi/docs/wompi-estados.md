@@ -52,8 +52,12 @@ que se le reportó: **la verdad es Wompi**. Solo aplica si `sourceObject.id` es 
 **Candidata:** otra transacción del checkout **de esta App** (`createdBy` frente a `app { id }`; sin autor
 conocido, o si Saleor no devuelve `app`, no se descarta), creada hace menos del TTL y sin resultado final.
 
-**Resultado final:** `CHARGE_SUCCESS`, o `CHARGE_FAILURE` que traiga `pspReference` **o que haya creado esta
-App** (sus rechazos son finales aunque no tengan `pspReference`). El `CHARGE_FAILURE` sin autor ni
+**Resultado final:** `CHARGE_SUCCESS`, o `CHARGE_FAILURE` que traiga `pspReference`, **o que haya creado esta
+App en una transacción sin ningún indicio de cobro**. Indicio es un `pspReference` en la transacción o en
+cualquiera de sus eventos, o un evento `CHARGE_ACTION_REQUIRED` (la respuesta de estado desconocido, que va sin
+`pspReference`). Wompi admite una sola transacción por `reference`, así que con indicio decide Wompi: cubre el
+reintento con la misma clave de idempotencia (Saleor reutiliza la transacción, que ya tenía un rechazo) y el
+«Sin transacción activa» de `transaction-process` tras un inicio ambiguo. El `CHARGE_FAILURE` sin autor ni
 `pspReference` lo crea Saleor cuando no recibe respuesta («Failed to delivery request.»): el cobro puede
 existir, así que sigue siendo candidata.
 
@@ -90,8 +94,9 @@ que no contradice el contrato B-1061.
   ambos acorta o alarga las ventanas.
 - Cambiar `WOMPI_REFERENCIA_CODIFICADA` con pagos en vuelo: las candidatas sin `pspReference` se buscan con
   la codificación actual y las creadas con la anterior no se encuentran.
-- `transaction-process` responde `CHARGE_FAILURE` sin `pspReference` cuando no tiene qué consultar (por ejemplo
-  tras un inicio de estado desconocido). Ese fallo lo crea la App, así que la transacción deja de ser candidata.
+- Reintento con la misma clave de idempotencia: la edad (TTL y ventana de carrera) cuenta desde la creación de
+  la transacción en Saleor, no desde el reintento. Un cobro creado al reintentar una transacción más vieja que el
+  TTL no se consulta, y mientras el reintento está en vuelo la transacción solo muestra el rechazo anterior.
 - Más de 5 transacciones abiertas: solo se consultan las 5 más recientes.
 
 ## Contrato transversal: «estado desconocido ≠ rechazo» (B-1061)

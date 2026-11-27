@@ -46,14 +46,25 @@ function esAjena(t: TransaccionDeCheckout, appId: string | undefined): boolean {
 }
 
 /**
- * Cobrada, o fallada con prueba: el fallo trae `pspReference` o lo respondió esta App (que solo falla cuando
- * no hay cobro). Uno sin ambas cosas lo crea Saleor cuando no recibe respuesta, y el cobro puede existir.
+ * ¿Pudo la App crear algo en Wompi para esta transacción? Wompi admite una sola transacción por `reference`
+ * (B-1095), así que cualquier rastro de ello queda aquí: un `pspReference` o un `CHARGE_ACTION_REQUIRED` (el
+ * inicio de estado desconocido responde sin psp).
+ */
+function conIndicioDeCobro(t: TransaccionDeCheckout): boolean {
+  return Boolean(t.pspReference) || t.events.some((e) => Boolean(e.pspReference) || e.type === 'CHARGE_ACTION_REQUIRED')
+}
+
+/**
+ * Cobrada, o fallada con prueba: el fallo trae `pspReference`, o lo respondió esta App y la transacción no tiene
+ * ningún indicio de cobro en Wompi. Un fallo de la App anterior a un reintento con la misma clave, o el
+ * «Sin transacción activa» de transaction-process tras un inicio ambiguo, NO es final: decide Wompi.
  */
 function tieneResultadoFinal(t: TransaccionDeCheckout, appId: string | undefined): boolean {
   return t.events.some(
     (e) =>
       e.type === 'CHARGE_SUCCESS' ||
-      (e.type === 'CHARGE_FAILURE' && (Boolean(e.pspReference) || esNuestraApp(e.createdBy, appId))),
+      (e.type === 'CHARGE_FAILURE' &&
+        (Boolean(e.pspReference) || (esNuestraApp(e.createdBy, appId) && !conIndicioDeCobro(t)))),
   )
 }
 
