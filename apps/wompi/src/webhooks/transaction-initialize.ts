@@ -1,12 +1,12 @@
 import { accionesParaResultado } from '../lib/acciones.js'
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { verifySaleorWebhook, SaleorWebhookError, crearPlazo } from '@licona/webhook-utils'
+import { verifySaleorWebhook, SaleorWebhookError, crearPlazo, type Plazo } from '@licona/webhook-utils'
 import { wompiClient, type WompiTransaction } from '../lib/wompi-client.js'
 import { copToCents } from '../lib/money.js'
 import { camposDeCorrelacion } from '../lib/correlacion.js'
 import { referenciaParaWompi } from '../lib/referencia.js'
 import { validarDatosTarjeta } from '../lib/tarjeta.js'
-import { sondearUrlPagoAsincrono } from '../lib/url-pago-asincrono.js'
+import { sondearUrlPagoAsincrono, INTERVALO_SONDEO_MS, TOPE_SONDEO_MS } from '../lib/url-pago-asincrono.js'
 import { traducirUserTypePse } from '../lib/pse-user-type.js'
 import { construirCustomerDataPse } from '../lib/pse-customer-data.js'
 import { esRechazoDefinitivo, esReferenciaDuplicada } from '../lib/wompi-error.js'
@@ -16,6 +16,8 @@ import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
 const MENSAJE_SIN_TRANSACCION = 'No se pudo iniciar el pago con Wompi'
 const MENSAJE_RECHAZO = 'Wompi rechazó la transacción'
 const MENSAJE_DESCONOCIDO = 'Estado en Wompi desconocido por un fallo transitorio; se resolverá por conciliación'
+/** Reserva del plazo global para responder a Saleor después de sondear la URL del banco (B-2605). */
+const MARGEN_RESPUESTA_MS = 1500
 
 // Mismo mapa que `transaction-process.ts` / `wompi-incoming.ts` (VOIDED -> CHARGE_FAILURE es deliberado).
 const RESULTADO_POR_ESTADO: Record<string, string> = {
@@ -184,22 +186,9 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     // cadena solo se puede reconstruir cuando algo falla.
     log.info({ pspReference: wompiTxn.id, metodo: method }, 'Transacción creada en Wompi')
 
-    // PSE y BANCOLOMBIA_TRANSFER: el comprador debe ir al banco (`async_payment_url`), que Wompi publica segundos
-    // después de crear. Si no llega a tiempo se degrada a nuestra página de orden: la transacción ya existe.
-    let redirectUrl = wompiTxn.redirect_url
-    let result = 'CHARGE_ACTION_REQUIRED'
-    if (method === 'PSE' || method === 'BANCOLOMBIA_TRANSFER') {
-      const client2 = client
-      const sondeo = await sondearUrlPagoAsincrono((id, signal) => client2.getTransaction(id, signal), wompiTxn.id, plazo.signal)
-      if (sondeo.tipo === 'url') {
-        redirectUrl = sondeo.url
-      } else if (sondeo.tipo === 'estadoFinal') {
-        result = RESULTADO_POR_ESTADO[sondeo.transaccion.status] ?? 'CHARGE_ACTION_REQUIRED'
-        log.warn({ pspReference: wompiTxn.id, estadoWompi: sondeo.transaccion.status, result }, 'Wompi dio estado final antes de publicar la URL del banco')
-      } else {
-        log.warn({ pspReference: wompiTxn.id, metodo: method, motivo: sondeo.motivo }, 'Sin URL del banco (async_payment_url): se redirige a la página de orden')
-      }
-    }
+    const { result, redirectUrl } = usaUrlDelBanco(method)
+      ? await destinoBancario(client, wompiTxn, method, plazo, log)
+      : { result: 'CHARGE_ACTION_REQUIRED', redirectUrl: wompiTxn.redirect_url }
 
     return reply.send({
       result,
@@ -234,17 +223,21 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     )
     const existente = await buscarPorReferencia(client, { reference, centavos: copToCents(action.amount), detalle: duplicada ? detalleReferencia(error) : undefined }, plazo.signal, log)
     if (existente) {
-      const result = RESULTADO_POR_ESTADO[existente.status] ?? 'CHARGE_ACTION_REQUIRED'
+      // B-2605: la recuperada en PENDING también necesita la URL del banco, si queda plazo para sondear.
+      const { result, redirectUrl } =
+        usaUrlDelBanco(method) && existente.status === 'PENDING' && plazo.restanteMs() > INTERVALO_SONDEO_MS
+          ? await destinoBancario(client!, existente, method, plazo, log)
+          : { result: RESULTADO_POR_ESTADO[existente.status] ?? 'CHARGE_ACTION_REQUIRED', redirectUrl: existente.redirect_url }
       log.info({ pspReference: existente.id, estadoWompi: existente.status, result }, 'Transacción localizada en Wompi por reference')
       return reply.send({
         result,
         amount: action.amount,
         pspReference: existente.id,
         actions: accionesParaResultado(result),
-        // `redirect_url` es la que mandamos al crear (/checkout/orden/<id>): pago.vue la necesita también con
-        // CHARGE_SUCCESS, o muestra INCOMPLETE_RESPONSE a un comprador que ya pagó.
+        // Sin URL del banco, `redirectUrl` es la que mandamos al crear (/checkout/orden/<id>): pago.vue la necesita
+        // también con CHARGE_SUCCESS, o muestra INCOMPLETE_RESPONSE a un comprador que ya pagó.
         ...(result !== 'CHARGE_FAILURE'
-          ? { data: { ...(existente.redirect_url ? { redirectUrl: existente.redirect_url } : {}), wompiTransactionId: existente.id } }
+          ? { data: { ...(redirectUrl ? { redirectUrl } : {}), wompiTransactionId: existente.id } }
           : {}),
       })
     }
@@ -257,6 +250,36 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
   } finally {
     plazo.limpiar()
   }
+}
+
+/** PSE y BANCOLOMBIA_TRANSFER: el comprador debe ir al banco (`async_payment_url`). */
+function usaUrlDelBanco(method: string): boolean {
+  return method === 'PSE' || method === 'BANCOLOMBIA_TRANSFER'
+}
+
+/**
+ * A dónde se manda al comprador. Wompi publica `async_payment_url` segundos después de crear: se sondea sin pasar
+ * del plazo global menos el margen de respuesta. Si no llega a tiempo se degrada a nuestra página de orden
+ * (`redirect_url`): la transacción ya existe. Un estado final recibido durante el sondeo manda sobre el resultado.
+ */
+async function destinoBancario(
+  client: ReturnType<typeof wompiClient>,
+  transaccion: Pick<WompiTransaction, 'id' | 'redirect_url'>,
+  metodo: string,
+  plazo: Plazo,
+  log: { warn: (o: object, m: string) => void },
+): Promise<{ result: string; redirectUrl: string | undefined }> {
+  const pendiente = { result: 'CHARGE_ACTION_REQUIRED', redirectUrl: transaccion.redirect_url }
+  const topeMs = Math.max(0, Math.min(TOPE_SONDEO_MS, plazo.restanteMs() - MARGEN_RESPUESTA_MS))
+  const sondeo = await sondearUrlPagoAsincrono((id, signal) => client.getTransaction(id, signal), transaccion.id, plazo.signal, { topeMs })
+  if (sondeo.tipo === 'url') return { ...pendiente, redirectUrl: sondeo.url }
+  if (sondeo.tipo === 'estadoFinal') {
+    const result = RESULTADO_POR_ESTADO[sondeo.transaccion.status] ?? 'CHARGE_ACTION_REQUIRED'
+    log.warn({ pspReference: transaccion.id, estadoWompi: sondeo.transaccion.status, result }, 'Wompi dio estado final antes de publicar la URL del banco')
+    return { ...pendiente, result }
+  }
+  log.warn({ pspReference: transaccion.id, metodo, motivo: sondeo.motivo }, 'Sin URL del banco (async_payment_url): se redirige a la página de orden')
+  return pendiente
 }
 
 /** Texto de `messages.reference` del 422 (lo genera Wompi; no contiene datos del comprador). */

@@ -92,9 +92,19 @@ rápido) se busca la transacción con `findTransactionsByReference` y se respond
 
 | Búsqueda | Respuesta |
 |---|---|
-| Una coincidencia exacta `APPROVED` / `PENDING` (estado desconocido de Wompi: como `PENDING`) | `CHARGE_SUCCESS` (+`REFUND`) / `CHARGE_ACTION_REQUIRED`, con su `pspReference` y `data { redirectUrl?, wompiTransactionId }` en ambos casos: `redirectUrl` es la `/checkout/orden/<id>` que se mandó al crear, y `pago.vue` la necesita también con `CHARGE_SUCCESS` (sin ella muestra INCOMPLETE_RESPONSE a un comprador que ya pagó) |
+| Una coincidencia exacta `APPROVED` / `PENDING` (estado desconocido de Wompi: como `PENDING`) | `CHARGE_SUCCESS` (+`REFUND`) / `CHARGE_ACTION_REQUIRED`, con su `pspReference` y `data { redirectUrl?, wompiTransactionId }` en ambos casos: `redirectUrl` es la `/checkout/orden/<id>` que se mandó al crear (salvo PSE/Bancolombia `PENDING`, ver abajo), y `pago.vue` la necesita también con `CHARGE_SUCCESS` (sin ella muestra INCOMPLETE_RESPONSE a un comprador que ya pagó) |
 | Una coincidencia exacta `DECLINED` / `ERROR` / `VOIDED` | `CHARGE_FAILURE` con su `pspReference`: el estado es cierto (Wompi no admite reutilizar la referencia) |
 | 0 coincidencias, varias, importe o moneda distintos del request, error de red/5xx, o plazo agotado (no se busca) | `CHARGE_ACTION_REQUIRED` sin `pspReference` (el inicio ambiguo de siempre); **nunca** `CHARGE_FAILURE` |
+
+**URL del banco en la transacción recuperada (B-2605).** En `PSE` y `BANCOLOMBIA_TRANSFER`, si la hallada está
+`PENDING` y queda más de 1 s de plazo, se sondea `async_payment_url` igual que tras crear (mismo helper): con URL,
+`redirectUrl` es la del banco; con estado final durante el sondeo, el `result` pasa a ser el de ese estado
+(`CHARGE_FAILURE` sin `data`); sin URL, se degrada a `redirect_url` con `warn`. En ambos caminos el sondeo se acota a
+`min(9 s, restante − 1,5 s)`.
+
+**Cadena de plazos (B-2605):** esta App responde en ≤ 15 s (`PLAZO_WEBHOOK_SINCRONO_MS`) < Saleor espera 18 s < el
+proxy de la tienda corta `transactionInitialize` / `transactionProcess` a los 20 s (`TIMEOUT_SALEOR_PAGO_MS`, repo
+storefront) < el navegador a los 30 s. `contrato-plazo.test.ts` (aquí) y `graphqlTimeout.test.ts` (storefront) lo vigilan.
 
 **Avisos humanos (B-1090):** con 422 duplicado, que Wompi diga «ya existe» y la búsqueda no devuelva UNA transacción
 es una contradicción: `log.error` con «revisión humana» y `detalleReferencia` (el texto de `messages.reference`, sin

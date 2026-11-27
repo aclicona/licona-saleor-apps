@@ -21,6 +21,7 @@ const TEXTO_ERROR = 'secreto-interno-xyz'
 const getAcceptanceToken = vi.fn()
 const createTransaction = vi.fn()
 const findTransactionsByReference = vi.fn()
+const getTransaction = vi.fn()
 
 const fetchFailed = () => new TypeError(`fetch failed ${TEXTO_ERROR}`)
 
@@ -41,14 +42,14 @@ const tarda =
     })
   }
 
-async function correr() {
+async function correr(data: Record<string, unknown> = { method: 'NEQUI', phone_number: '3001234567' }) {
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
   log.child.mockReturnValue(log)
   const cuerpo = {
     transaction: { id: 'VHJhbnNhY3Rpb25JdGVtOjE=', pspReference: '' },
     action: { amount: 120_000, currency: 'COP' },
     sourceObject: { email: 'cliente@example.com' },
-    data: { method: 'NEQUI', phone_number: '3001234567' },
+    data,
   }
   const req = { rawBody: '{}', body: cuerpo, headers: {}, log } as unknown as FastifyRequest
   let payload: any
@@ -88,6 +89,7 @@ beforeEach(() => {
     getAcceptanceToken,
     createTransaction,
     findTransactionsByReference,
+    getTransaction,
   } as unknown as ReturnType<typeof wompiClient>)
 })
 afterEach(() => {
@@ -274,5 +276,124 @@ describe('transaction-initialize — B-1095 revisión Opus', () => {
     const { payload, log } = await correr()
     expect(payload).toEqual(SIN_PSP)
     expect(log.error.mock.calls.some(([, msg]) => /revisión humana/i.test(msg))).toBe(true)
+  })
+})
+
+// B-2605: la transacción recuperada por `reference` en PSE / Bancolombia también necesita la URL del banco.
+describe('transaction-initialize — URL del banco al recuperar una transacción existente (B-2605)', () => {
+  const URL_ORDEN = 'https://tienda.co/checkout/orden/x'
+  const URL_BANCO = 'https://banco.example/pago'
+  /** Margen que el handler reserva para responder tras el sondeo. */
+  const MARGEN_MS = 1500
+  const PSE = {
+    method: 'PSE',
+    user_type: 'PERSON',
+    user_legal_id_type: 'CC',
+    user_legal_id: '1000000000',
+    financial_institution_code: '1',
+    customer_full_name: 'Cliente de Prueba',
+    customer_phone_number: '3001234567',
+  }
+  const BANCOLOMBIA = { method: 'BANCOLOMBIA_TRANSFER' }
+  const existente = { ...BASE, id: 'w-e', status: 'PENDING', redirect_url: URL_ORDEN }
+  const sinUrl = { ...existente, payment_method: { extra: {} } }
+  const conUrl = { ...existente, payment_method: { extra: { async_payment_url: URL_BANCO } } }
+  /** Crear tarda `ms` y falla con el timeout propio del cliente, dejando plazo sin gastar. */
+  const timeoutTras = (ms: number, error: () => Error = () => Object.assign(new Error(TEXTO_ERROR), { name: 'TimeoutError' })) =>
+    async (...args: unknown[]) => {
+      await tarda(ms, null)(...args)
+      throw error()
+    }
+
+  beforeEach(() => {
+    findTransactionsByReference.mockResolvedValue([existente])
+    getTransaction.mockResolvedValue(conUrl)
+  })
+
+  it('422 duplicada en PSE PENDING -> redirectUrl es la URL del banco', async () => {
+    const { payload } = await correr(PSE)
+    expect(payload).toEqual({
+      result: 'CHARGE_ACTION_REQUIRED',
+      amount: 120_000,
+      pspReference: 'w-e',
+      actions: [],
+      data: { redirectUrl: URL_BANCO, wompiTransactionId: 'w-e' },
+    })
+    expect(getTransaction.mock.calls[0][0]).toBe('w-e')
+    expect(getTransaction.mock.calls[0][1]).toBe(createTransaction.mock.calls[0][1])
+  })
+
+  it('timeout al crear con BANCOLOMBIA_TRANSFER -> redirectUrl es la URL del banco (segundo sondeo)', async () => {
+    createTransaction.mockImplementation(timeoutTras(10_000))
+    getTransaction.mockResolvedValueOnce(sinUrl).mockResolvedValueOnce(conUrl)
+    const { payload, transcurrido } = await correr(BANCOLOMBIA)
+    expect(payload.data).toEqual({ redirectUrl: URL_BANCO, wompiTransactionId: 'w-e' })
+    expect(getTransaction).toHaveBeenCalledTimes(2)
+    expect(transcurrido).toBe(11_000)
+  })
+
+  it.each([
+    ['NEQUI', { method: 'NEQUI', phone_number: '3001234567' }],
+    ['CARD', { method: 'CARD', token: 'tok_test_123_abc' }],
+  ])('%s no sondea', async (_n, data) => {
+    const { payload } = await correr(data)
+    expect(payload.data?.redirectUrl).toBe(URL_ORDEN)
+    expect(getTransaction).not.toHaveBeenCalled()
+  })
+
+  it('una existente APPROVED no sondea', async () => {
+    findTransactionsByReference.mockResolvedValue([{ ...existente, status: 'APPROVED' }])
+    const { payload } = await correr(PSE)
+    expect(payload).toMatchObject({ result: 'CHARGE_SUCCESS', data: { redirectUrl: URL_ORDEN } })
+    expect(getTransaction).not.toHaveBeenCalled()
+  })
+
+  it('sin plazo restante no sondea y degrada a redirect_url', async () => {
+    createTransaction.mockImplementation(timeoutTras(PLAZO_GLOBAL_MS - 500, duplicada))
+    const { payload } = await correr(PSE)
+    expect(payload).toMatchObject({ pspReference: 'w-e', data: { redirectUrl: URL_ORDEN } })
+    expect(getTransaction).not.toHaveBeenCalled()
+  })
+
+  it('sin URL a tiempo -> redirect_url con log.warn', async () => {
+    getTransaction.mockResolvedValue(sinUrl)
+    const { payload, log } = await correr(PSE)
+    expect(payload).toMatchObject({ result: 'CHARGE_ACTION_REQUIRED', data: { redirectUrl: URL_ORDEN } })
+    expect(log.warn.mock.calls.some(([, msg]) => /async_payment_url/.test(msg))).toBe(true)
+  })
+
+  it.each([
+    ['DECLINED', 'CHARGE_FAILURE', [], false],
+    ['APPROVED', 'CHARGE_SUCCESS', ['REFUND'], true],
+  ])('estado final %s durante el sondeo -> %s coherente', async (status, result, actions, conData) => {
+    getTransaction.mockResolvedValue({ ...sinUrl, status })
+    const { payload } = await correr(PSE)
+    expect(payload).toMatchObject({ result, actions, pspReference: 'w-e' })
+    if (conData) expect(payload.data).toEqual({ redirectUrl: URL_ORDEN, wompiTransactionId: 'w-e' })
+    else expect(payload).not.toHaveProperty('data')
+  })
+
+  it('el sondeo de la existente no pasa del plazo restante menos el margen', async () => {
+    createTransaction.mockImplementation(timeoutTras(12_000, duplicada))
+    getTransaction.mockResolvedValue(sinUrl)
+    const { transcurrido } = await correr(PSE)
+    expect(getTransaction).toHaveBeenCalled()
+    expect(transcurrido).toBeLessThanOrEqual(PLAZO_GLOBAL_MS - MARGEN_MS)
+  })
+
+  it('el sondeo tras crear tampoco pasa del plazo restante menos el margen', async () => {
+    createTransaction.mockImplementation(tarda(12_000, sinUrl))
+    getTransaction.mockResolvedValue(sinUrl)
+    const { payload, transcurrido } = await correr(PSE)
+    expect(payload.data?.redirectUrl).toBe(URL_ORDEN)
+    expect(transcurrido).toBeLessThanOrEqual(PLAZO_GLOBAL_MS - MARGEN_MS)
+  })
+
+  it('con menos del margen restante tras crear consulta una sola vez (tope nunca negativo)', async () => {
+    createTransaction.mockImplementation(tarda(PLAZO_GLOBAL_MS - 500, sinUrl))
+    getTransaction.mockResolvedValue(sinUrl)
+    const { transcurrido } = await correr(PSE)
+    expect(getTransaction).toHaveBeenCalledTimes(1)
+    expect(transcurrido).toBe(PLAZO_GLOBAL_MS - 500)
   })
 })
