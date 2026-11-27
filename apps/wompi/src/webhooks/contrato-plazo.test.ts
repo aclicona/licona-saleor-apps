@@ -245,10 +245,10 @@ describe('contrato «los webhooks síncronos responden dentro del plazo» (B-108
     expect(PLAZO_WEBHOOK_SINCRONO_MS).toBeLessThan(SALEOR_ESPERA_MS)
   })
 
-  // B-2605: la cadena completa es App (15 s) < Saleor (18 s) < proxy de la tienda (20 s, en el repo
+  // B-2605: la cadena completa es App (15 s) < Saleor (18 s) < proxy de la tienda (22 s, en el repo
   // storefront: `TIMEOUT_SALEOR_PAGO_MS`, server/utils/saleor.ts).
-  it('candado: App 15 s < espera de Saleor 18 s < proxy de la tienda 20 s', () => {
-    const PROXY_TIENDA_PAGO_MS = 20_000
+  it('candado: App 15 s < espera de Saleor 18 s < proxy de la tienda 22 s', () => {
+    const PROXY_TIENDA_PAGO_MS = 22_000
     expect(PLAZO_WEBHOOK_SINCRONO_MS).toBe(15_000)
     expect(SALEOR_ESPERA_MS).toBeLessThan(PROXY_TIENDA_PAGO_MS)
   })

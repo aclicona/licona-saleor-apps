@@ -103,7 +103,7 @@ rápido) se busca la transacción con `findTransactionsByReference` y se respond
 `min(9 s, restante − 1,5 s)`.
 
 **Cadena de plazos (B-2605):** esta App responde en ≤ 15 s (`PLAZO_WEBHOOK_SINCRONO_MS`) < Saleor espera 18 s < el
-proxy de la tienda corta `transactionInitialize` / `transactionProcess` a los 20 s (`TIMEOUT_SALEOR_PAGO_MS`, repo
+proxy de la tienda corta cada envío de `transactionInitialize` / `transactionProcess` a los 22 s (`TIMEOUT_SALEOR_PAGO_MS`, repo
 storefront) < el navegador a los 30 s. `contrato-plazo.test.ts` (aquí) y `graphqlTimeout.test.ts` (storefront) lo vigilan.
 
 **Avisos humanos (B-1090):** con 422 duplicado, que Wompi diga «ya existe» y la búsqueda no devuelva UNA transacción
