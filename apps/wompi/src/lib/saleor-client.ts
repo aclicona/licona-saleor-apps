@@ -274,3 +274,54 @@ export async function obtenerEventosTransaccion(transactionId: string): Promise<
     amount: Number(e.amount.amount),
   }))
 }
+
+// ─── Transacciones de un checkout (B-2616) ───────────────────────────────────
+
+/** Tope propio de la consulta: corre dentro del plazo global del webhook de inicio y debe dejarle margen. */
+const TIMEOUT_TRANSACCIONES_CHECKOUT_MS = 4_000
+
+const TRANSACCIONES_DE_CHECKOUT = gql`
+  query TransaccionesDeCheckout($id: ID!) {
+    checkout(id: $id) {
+      transactions {
+        id
+        pspReference
+        createdAt
+        chargedAmount { amount }
+        events { type pspReference }
+      }
+    }
+  }
+`
+
+export interface TransaccionDeCheckout {
+  id: string
+  pspReference: string
+  createdAt: string
+  chargedAmount: number
+  events: Array<{ type: string | null; pspReference: string }>
+}
+
+interface TransaccionesDeCheckoutResponse {
+  checkout: {
+    transactions: Array<Omit<TransaccionDeCheckout, 'chargedAmount'> & { chargedAmount: { amount: number } }> | null
+  } | null
+}
+
+/**
+ * Transacciones de un checkout (requiere HANDLE_PAYMENTS, que el manifiesto ya pide).
+ * Lanza si falla el transporte o si Saleor no devuelve el checkout: «no sé» no es «no hay ninguna».
+ */
+export async function obtenerTransaccionesDelCheckout(
+  checkoutId: string,
+  signal: AbortSignal,
+): Promise<TransaccionDeCheckout[]> {
+  const client = crearClienteSaleor()
+  const data = await client.request<TransaccionesDeCheckoutResponse>({
+    document: TRANSACCIONES_DE_CHECKOUT,
+    variables: { id: checkoutId },
+    signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_TRANSACCIONES_CHECKOUT_MS)]),
+  })
+  if (!data?.checkout) throw new Error('Saleor no devolvió el checkout')
+  return (data.checkout.transactions ?? []).map((t) => ({ ...t, chargedAmount: Number(t.chargedAmount.amount) }))
+}

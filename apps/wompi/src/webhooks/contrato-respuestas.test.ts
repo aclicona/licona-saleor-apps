@@ -20,6 +20,11 @@ vi.mock('@licona/webhook-utils', async (importOriginal) => ({
   verifySaleorWebhook: vi.fn(),
 }))
 vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
+// B-2616: un pago anterior sin resolver en el checkout (solo corre si el cuerpo trae un id de Checkout).
+vi.mock('../lib/saleor-client.js', () => ({
+  obtenerTransaccionesDelCheckout: () =>
+    Promise.resolve([{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date().toISOString(), chargedAmount: 0, events: [] }]),
+}))
 // Único valor aleatorio en una respuesta: la referencia sin-id del reembolso desconocido.
 vi.mock('node:crypto', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:crypto')>()),
@@ -43,6 +48,8 @@ const PSP = '12084641-1791286722-99200'
 const TRANSACCION = { id: 'VHJhbnNhY3Rpb25JdGVtOjE=', pspReference: PSP }
 const ACCION = { amount: 3000 }
 const INICIO = { transaction: { id: TRANSACCION.id, pspReference: '' }, action: { amount: 120_000, currency: 'COP' }, sourceObject: { email: 'cliente@example.com' } }
+
+const INICIO_CHECKOUT = { ...INICIO, sourceObject: { ...INICIO.sourceObject, id: Buffer.from('Checkout:1').toString('base64') } }
 
 const rechazo = (status: number) => new WompiHttpError('detalle-interno', status)
 const txnWompi = (status: string, extra: Record<string, unknown> = {}) => ({
@@ -70,6 +77,9 @@ const CASOS: Caso[] = [
 
   { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'accion_requerida', handler: transactionInitializeHandler, body: INICIO, cliente: inicioBase },
   { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'fallo_moneda', handler: transactionInitializeHandler, body: { ...INICIO, action: { amount: 120_000, currency: 'USD' } }, cliente: inicioBase },
+  { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'fallo_sin_saldo', handler: transactionInitializeHandler, body: { ...INICIO, action: { amount: 0, currency: 'COP' } }, cliente: inicioBase },
+  { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'fallo_pago_en_curso', handler: transactionInitializeHandler, body: INICIO_CHECKOUT, cliente: { ...inicioBase, getTransaction: () => Promise.resolve(txnWompi('PENDING')) } },
+  { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'fallo_sin_comprobar', handler: transactionInitializeHandler, body: INICIO_CHECKOUT, cliente: { ...inicioBase, getTransaction: () => Promise.reject(rechazo(503)) } },
   { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'fallo_sin_token', handler: transactionInitializeHandler, body: INICIO, cliente: { ...inicioBase, getAcceptanceToken: () => Promise.reject(new Error('red')) } },
   { evento: 'TRANSACTION_INITIALIZE_SESSION', caso: 'fallo_rechazo', handler: transactionInitializeHandler, body: INICIO, cliente: { ...inicioBase, createTransaction: () => Promise.reject(rechazo(422)) } },
   {

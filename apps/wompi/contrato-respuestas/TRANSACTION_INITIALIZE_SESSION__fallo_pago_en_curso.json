@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "fallo_pago_en_curso",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 120000,
+    "message": "Ya hay un pago en curso para este carrito"
+  }
+}

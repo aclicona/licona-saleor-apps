@@ -8,7 +8,12 @@ vi.mock('graphql-request', () => ({
   },
 }))
 
-import { listarTransaccionesConSolicitud, reportTransactionEvent, MAX_PAGINAS_SOLICITUDES } from './saleor-client.js'
+import {
+  listarTransaccionesConSolicitud,
+  obtenerTransaccionesDelCheckout,
+  reportTransactionEvent,
+  MAX_PAGINAS_SOLICITUDES,
+} from './saleor-client.js'
 
 const nodo = (id: string) => ({
   node: {
@@ -85,5 +90,44 @@ describe('reportTransactionEvent: availableActions', () => {
   it('CANCEL_SUCCESS sin parámetro sigue mandando [] como hoy', async () => {
     await reportTransactionEvent({ ...base, type: 'CANCEL_SUCCESS' })
     expect(vars().availableActions).toEqual([])
+  })
+})
+
+describe('obtenerTransaccionesDelCheckout (B-2616)', () => {
+  beforeEach(() => {
+    request.mockReset()
+    process.env.SALEOR_API_URL = 'https://saleor.test/graphql/'
+    process.env.SALEOR_APP_TOKEN = 'tok'
+  })
+  const señal = () => new AbortController().signal
+
+  it('consulta por id de checkout y aplana el importe cobrado', async () => {
+    const evento = { type: 'CHARGE_REQUEST', pspReference: 'p' }
+    request.mockResolvedValue({
+      checkout: {
+        transactions: [
+          { id: 'T1', pspReference: 'p', createdAt: '2026-11-27T12:00:00Z', chargedAmount: { amount: '5' }, events: [evento] },
+        ],
+      },
+    })
+
+    await expect(obtenerTransaccionesDelCheckout('C1', señal())).resolves.toEqual([
+      { id: 'T1', pspReference: 'p', createdAt: '2026-11-27T12:00:00Z', chargedAmount: 5, events: [evento] },
+    ])
+    expect(request.mock.calls[0][0].variables).toEqual({ id: 'C1' })
+    expect(request.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('la señal se corta con el plazo recibido', async () => {
+    request.mockResolvedValue({ checkout: { transactions: [] } })
+    const plazo = new AbortController()
+    await obtenerTransaccionesDelCheckout('C1', plazo.signal)
+    plazo.abort()
+    expect(request.mock.calls[0][0].signal.aborted).toBe(true)
+  })
+
+  it('checkout inexistente: lanza (no se puede afirmar que no haya transacciones)', async () => {
+    request.mockResolvedValue({ checkout: null })
+    await expect(obtenerTransaccionesDelCheckout('C1', señal())).rejects.toThrow('checkout')
   })
 })

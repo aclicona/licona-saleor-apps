@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "fallo_sin_comprobar",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 120000,
+    "message": "No se pudo comprobar un pago anterior; reintente"
+  }
+}

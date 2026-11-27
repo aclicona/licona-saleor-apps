@@ -1,0 +1,9 @@
+{
+  "evento": "TRANSACTION_INITIALIZE_SESSION",
+  "caso": "fallo_sin_saldo",
+  "respuesta": {
+    "result": "CHARGE_FAILURE",
+    "amount": 0,
+    "message": "El carrito no tiene saldo por cobrar"
+  }
+}

@@ -42,6 +42,34 @@ ese fallo; es solo ruido. No se filtra a propósito: las alternativas (decidir f
 las demás transacciones de la reference) no son deterministas y arriesgan dinero. Lo fija el test «fallo
 tardío de otro intento con la misma reference» en `src/webhooks/wompi-incoming.test.ts`.
 
+## Guardia de segundo cobro en `transaction-initialize` (B-2616)
+
+Antes de crear una transacción en Wompi (tras validar CARD/PSE y antes del acceptance token),
+`src/lib/guardia-segundo-cobro.ts` lee las transacciones del checkout en Saleor (`checkout.transactions`,
+permiso `HANDLE_PAYMENTS`, timeout 4 s) y pregunta a Wompi por las que siguen abiertas. Saleor solo sabe lo
+que se le reportó: **la verdad es Wompi**. Solo aplica si `sourceObject.id` es un Checkout.
+
+**Candidata:** otra transacción del checkout, creada hace menos del TTL, sin `CHARGE_SUCCESS` y sin
+`CHARGE_FAILURE` con `pspReference` (un fallo sin él no prueba nada en Wompi). Se consultan como máximo las
+5 más recientes, en paralelo y dentro del plazo global: `getTransaction(pspReference)` o, sin él,
+`findTransactionsByReference(referenciaParaWompi(id))`.
+
+| Situación | Resultado |
+|---|---|
+| Sin candidatas | procede |
+| Alguna candidata `PENDING` o `APPROVED` en Wompi (o con un estado desconocido) | rechaza: «Ya hay un pago en curso para este carrito» |
+| Todas `DECLINED`, `ERROR` o `VOIDED` | procede |
+| Sin rastro en Wompi (búsqueda por reference vacía) | procede, salvo carrera |
+| Carrera: sin rastro, creada hace menos de 30 s y más antigua que la actual (empate: menor id) | la actual cede: «Ya hay un pago en curso para este carrito» |
+| Wompi no responde (o error HTTP) sobre alguna candidata y ninguna está viva | rechaza (fail-closed): «No se pudo comprobar un pago anterior; reintente» |
+| Saleor no responde la consulta | procede (fail-open) con log `error` |
+| Candidata más antigua que el TTL | no bloquea; log `warn` si tenía `pspReference` |
+| `action.amount <= 0` (Saleor ya descontó lo cobrado) | rechaza antes de hablar con Wompi: «El carrito no tiene saldo por cobrar» |
+
+**TTL:** 30 minutos; `WOMPI_BLOQUEO_PENDIENTE_MIN` (entero positivo; inválido → 30). El rechazo es
+`CHARGE_FAILURE` sin `pspReference`, `data` ni `actions`: para esa transacción no se creó nada en Wompi, así
+que no contradice el contrato B-1061.
+
 ## Contrato transversal: «estado desconocido ≠ rechazo» (B-1061)
 
 Ningún handler síncrono `transaction-*` puede convertir un fallo de transporte hacia Wompi (`AbortError`,

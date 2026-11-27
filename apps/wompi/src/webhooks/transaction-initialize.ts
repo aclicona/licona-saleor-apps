@@ -11,11 +11,13 @@ import { traducirUserTypePse } from '../lib/pse-user-type.js'
 import { construirCustomerDataPse } from '../lib/pse-customer-data.js'
 import { esRechazoDefinitivo, esReferenciaDuplicada } from '../lib/wompi-error.js'
 import { PLAZO_GLOBAL_MS } from '../lib/plazo.js'
+import { comprobarSegundoCobro } from '../lib/guardia-segundo-cobro.js'
 
 /** Mensajes fijos hacia Saleor (B-1060): el texto del error real va solo al log. */
 const MENSAJE_SIN_TRANSACCION = 'No se pudo iniciar el pago con Wompi'
 const MENSAJE_RECHAZO = 'Wompi rechazó la transacción'
 const MENSAJE_DESCONOCIDO = 'Estado en Wompi desconocido por un fallo transitorio; se resolverá por conciliación'
+const MENSAJE_SIN_SALDO = 'El carrito no tiene saldo por cobrar'
 
 // Mismo mapa que `transaction-process.ts` / `wompi-incoming.ts` (VOIDED -> CHARGE_FAILURE es deliberado).
 const RESULTADO_POR_ESTADO: Record<string, string> = {
@@ -55,7 +57,7 @@ interface TransactionInitializePayload {
     token?: unknown
     installments?: unknown
   }
-  sourceObject?: { email?: string }
+  sourceObject?: { id?: string; email?: string }
 }
 
 export async function transactionInitializeHandler(req: FastifyRequest, reply: FastifyReply) {
@@ -98,6 +100,12 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     })
   }
 
+  // Saleor descuenta lo ya cobrado del importe: 0 es un carrito sin saldo (B-2616).
+  if (action.amount <= 0) {
+    log.warn({ amount: action.amount }, 'Importe sin saldo por cobrar: se rechaza sin llamar a Wompi')
+    return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: MENSAJE_SIN_SALDO })
+  }
+
   // CARD: se valida ANTES de hablar con Wompi (ni siquiera el acceptance token).
   // Sin log del token: es credencial de un solo uso del comprador.
   const tarjeta = method === 'CARD' ? validarDatosTarjeta(data) : undefined
@@ -130,6 +138,21 @@ export async function transactionInitializeHandler(req: FastifyRequest, reply: F
     // Saleor sends COP (e.g. 120000). Wompi expects centavos (12000000).
     const amountInCents = copToCents(action.amount)
     client = wompiClient()
+
+    // B-2616: no crear un segundo cobro mientras otro del mismo checkout siga vivo en Wompi.
+    const guardia = await comprobarSegundoCobro({
+      checkoutId: sourceObject?.id,
+      transactionId: transaction.id,
+      wompi: client,
+      signal: plazo.signal,
+      restanteMs: () => plazo.restanteMs(),
+      log,
+    })
+    if (guardia.bloquear) {
+      // Sin pspReference, data ni actions: en Wompi no se creó nada para esta transacción.
+      return reply.send({ result: 'CHARGE_FAILURE', amount: action.amount, message: guardia.message })
+    }
+
     const acceptanceToken = await client.getAcceptanceToken(plazo.signal)
 
     let paymentMethod: NonNullable<Parameters<typeof client.createTransaction>[0]['paymentMethod']>

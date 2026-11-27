@@ -11,6 +11,12 @@ vi.mock('@licona/webhook-utils', async (importOriginal) => ({
   verifySaleorWebhook: vi.fn(),
 }))
 vi.mock('../lib/wompi-client.js', () => ({ wompiClient: vi.fn() }))
+// B-2616: la guardia de segundo cobro consulta Saleor; aquí hay siempre un pago anterior sin resolver.
+vi.mock('../lib/saleor-client.js', () => ({
+  obtenerTransaccionesDelCheckout: vi.fn(() =>
+    Promise.resolve([{ id: 'otra', pspReference: 'psp-otra', createdAt: new Date().toISOString(), chargedAmount: 0, events: [] }]),
+  ),
+}))
 
 import { wompiClient } from '../lib/wompi-client.js'
 import { transactionInitializeHandler } from './transaction-initialize.js'
@@ -29,6 +35,8 @@ interface Escenario {
   falla: Llamada
   /** Antes de este fallo la transacción/reembolso pudo haberse creado en Wompi. */
   puedeExistirEnWompi: boolean
+  /** Campos del cuerpo que este escenario añade al del handler. */
+  cuerpo?: Record<string, unknown>
 }
 
 interface Entrada {
@@ -49,6 +57,12 @@ const TABLA: Record<string, Entrada> = {
     escenarios: [
       { falla: 'getAcceptanceToken', puedeExistirEnWompi: false },
       { falla: 'createTransaction', puedeExistirEnWompi: true },
+      // B-2616: la guardia no puede comprobar el pago anterior; aún no se ha creado nada.
+      {
+        falla: 'getTransaction',
+        puedeExistirEnWompi: false,
+        cuerpo: { sourceObject: { id: Buffer.from('Checkout:1').toString('base64') } },
+      },
     ],
   },
   'transaction-process': {
@@ -157,7 +171,7 @@ describe('contrato «estado desconocido ≠ rechazo» (B-1061)', () => {
         if (!excepcion) {
           it(`${titulo} -> no responde fallo final ni filtra el error`, async () => {
             montarCliente(esc.falla, crear())
-            const res = await correr(entrada)
+            const res = await correr({ ...entrada, body: { ...entrada.body, ...esc.cuerpo } })
             expect(violaciones(res, esc)).toEqual([])
           })
         } else {
